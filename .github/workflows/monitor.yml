@@ -47,6 +47,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALERT_THRESHOLD: ${{ vars.ALERT_THRESHOLD || '10' }}
           FLARESOLVERR_URL: http://localhost:8191/v1
+          DOWNDETECTOR_URL: ${{ vars.DOWNDETECTOR_URL || 'https://downdetector.hu/problema/mbh-bank/' }}
           HEARTBEAT_ENABLED: ${{ vars.HEARTBEAT_ENABLED || 'true' }}
           HEARTBEAT_HOUR: ${{ vars.HEARTBEAT_HOUR || '9' }}
         run: python -m src.main
