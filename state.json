@@ -1,9 +1,9 @@
 {
   "last_value": 0,
-  "last_checked": "2026-04-22T20:06:33.983307+00:00",
+  "last_checked": null,
   "alert_active": false,
   "alert_started_at": null,
-  "consecutive_fetch_failures": 3,
-  "error_alert_sent": true,
-  "last_heartbeat_date": "2026-04-22"
+  "consecutive_fetch_failures": 0,
+  "error_alert_sent": false,
+  "last_heartbeat_date": null
 }
