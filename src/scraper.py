@@ -107,6 +107,7 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
     """
     # Find all RSC push payloads
     pushes = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
+    logger.info("RSC strategy: found %d __next_f.push payloads", len(pushes))
 
     for push in pushes:
         # Unescape RSC content
@@ -114,6 +115,7 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
 
         if '"reportsValue"' not in content:
             continue
+        logger.info("RSC strategy: found payload with reportsValue (%d chars)", len(content))
 
         # Extract dataPoints array
         match = re.search(
@@ -122,6 +124,12 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
             re.DOTALL,
         )
         if not match:
+            logger.warning("RSC strategy: reportsValue found but no dataPoints array match")
+            # Log a snippet around reportsValue for debugging
+            idx = content.find('"reportsValue"')
+            if idx >= 0:
+                snippet = content[max(0, idx - 100):idx + 200]
+                logger.warning("RSC snippet: ...%s...", snippet)
             continue
 
         try:
@@ -144,6 +152,13 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
 
         if points:
             return sorted(points, key=lambda p: p.timestamp)
+
+    # Debug: check if reportsValue exists anywhere in the HTML
+    if "reportsValue" in html:
+        logger.warning("RSC strategy: reportsValue exists in HTML but not matched by push regex")
+        idx = html.find("reportsValue")
+        snippet = html[max(0, idx - 200):idx + 200]
+        logger.warning("Raw HTML snippet: ...%s...", snippet)
 
     return []
 
