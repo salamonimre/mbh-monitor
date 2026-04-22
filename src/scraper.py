@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import requests
+from curl_cffi import requests as cf_requests
 
 from src import config
 
@@ -69,12 +70,17 @@ def fetch_html(url: str, *, timeout: int | None = None) -> str:
             # Step 1: Get Cloudflare bypass cookies
             cookies, user_agent = _get_cf_cookies(url, timeout)
 
-            # Step 2: Fetch raw HTML with those cookies
+            # Step 2: Fetch raw HTML with curl_cffi (Chrome TLS fingerprint)
+            # Cloudflare binds cookies to TLS fingerprint, so we must match
+            # the browser fingerprint that FlareSolverr used.
             headers = {"User-Agent": user_agent} if user_agent else {}
-            resp = requests.get(url, cookies=cookies, headers=headers, timeout=timeout)
+            resp = cf_requests.get(
+                url, cookies=cookies, headers=headers,
+                timeout=timeout, impersonate="chrome",
+            )
 
             if resp.status_code == 403:
-                raise FetchError(f"HTTP 403 despite cookies – Cloudflare may need re-solving")
+                raise FetchError("HTTP 403 despite cookies – Cloudflare may need re-solving")
             resp.raise_for_status()
 
             html = resp.text

@@ -69,7 +69,7 @@ class TestParseReports:
 
 
 class TestFetchHtml:
-    @patch("src.scraper.requests.get")
+    @patch("src.scraper.cf_requests.get")
     @patch("src.scraper._get_cf_cookies")
     def test_fetch_html_success(self, mock_cookies, mock_get):
         mock_cookies.return_value = ({"cf_clearance": "abc"}, "Mozilla/5.0")
