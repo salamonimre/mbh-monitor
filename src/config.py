@@ -17,13 +17,12 @@ ALERT_THRESHOLD: int = int(os.environ.get("ALERT_THRESHOLD", "30"))
 
 STATE_FILE: str = os.environ.get("STATE_FILE", "state.json")
 
-HTTP_TIMEOUT: int = 15
-
-USER_AGENT: str = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
+FLARESOLVERR_URL: str = os.environ.get(
+    "FLARESOLVERR_URL",
+    "http://localhost:8191/v1",
 )
+
+HTTP_TIMEOUT: int = 30
 
 MAX_RETRIES: int = 3
 RETRY_BACKOFF_BASE: float = 2.0

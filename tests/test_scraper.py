@@ -11,16 +11,22 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class TestParseReports:
-    def test_parse_normal_response_aria_label(self):
+    def test_parse_rsc_data_points(self):
+        """RSC strategy extracts precise per-interval values."""
         html = (FIXTURES / "normal_response.html").read_text()
         reports = parse_reports(html)
-        assert len(reports) == 1
-        assert reports[0].value == 12
+        assert len(reports) == 5
+        assert all(isinstance(r, ReportPoint) for r in reports)
+        # Should be sorted by timestamp
+        timestamps = [r.timestamp for r in reports]
+        assert timestamps == sorted(timestamps)
+        # Last value should be 2 (from fixture)
+        assert reports[-1].value == 2
 
-    def test_parse_high_alert_response(self):
+    def test_parse_high_alert_rsc(self):
         html = (FIXTURES / "high_alert_response.html").read_text()
         reports = parse_reports(html)
-        assert len(reports) > 0
+        assert len(reports) == 5
         assert reports[-1].value == 152
 
     def test_parse_no_problems_heading_only(self):
@@ -43,71 +49,62 @@ class TestParseReports:
         with pytest.raises(ParseError):
             parse_reports("<html><body>nothing useful here</body></html>")
 
-    def test_regex_fallback_when_no_json(self):
-        """HTML with current-number class but no script/JSON data."""
+    def test_rsc_strategy_takes_priority_over_aria_label(self):
+        """RSC data should be preferred over aria-label (24h peak)."""
+        html = (FIXTURES / "normal_response.html").read_text()
+        reports = parse_reports(html)
+        # RSC says last value is 2, aria-label says peak is 5
+        assert reports[-1].value == 2
+
+    def test_aria_label_fallback_when_no_rsc(self):
+        """Falls back to aria-label when RSC data missing."""
         html = """
         <html><body>
-        <div class="current-number">42</div>
+        <div aria-label="Reports chart for the last 24 hours with a peak of 42 reports, status: ok"></div>
         </body></html>
         """
         reports = parse_reports(html)
         assert len(reports) == 1
         assert reports[0].value == 42
 
-    def test_aria_label_strategy_priority(self):
-        """aria-label should take priority over heading."""
-        html = """
-        <html><body>
-        <h1>User reports show <span>no current problems</span></h1>
-        <div aria-label="Reports chart for the last 24 hours with a peak of 5 reports, status: no problems"></div>
-        </body></html>
-        """
-        reports = parse_reports(html)
-        assert reports[0].value == 5  # aria-label wins, not 0 from heading
-
 
 class TestFetchHtml:
-    @patch("src.scraper.cffi_requests.get")
-    def test_fetch_html_success(self, mock_get):
+    @patch("src.scraper.requests.post")
+    def test_fetch_html_success(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.text = "<html>ok</html>"
-        mock_get.return_value = mock_resp
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "solution": {"response": "<html>ok</html>"},
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
 
         result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
-        mock_get.assert_called_once()
 
-    @patch("src.scraper.time.sleep")
-    @patch("src.scraper.cffi_requests.get")
-    def test_fetch_html_retries_on_429(self, mock_get, mock_sleep):
-        resp_429 = MagicMock()
-        resp_429.status_code = 429
-        resp_200 = MagicMock()
-        resp_200.status_code = 200
-        resp_200.text = "<html>ok</html>"
-        mock_get.side_effect = [resp_429, resp_200]
-
-        result = fetch_html("https://example.com")
-        assert result == "<html>ok</html>"
-        assert mock_sleep.called
-
-    @patch("src.scraper.cffi_requests.get")
-    def test_fetch_html_raises_on_403(self, mock_get):
+    @patch("src.scraper.requests.post")
+    def test_fetch_html_flaresolverr_error(self, mock_post):
         mock_resp = MagicMock()
-        mock_resp.status_code = 403
-        mock_get.return_value = mock_resp
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "error",
+            "message": "Challenge not solved",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
 
-        with pytest.raises(FetchError, match="403"):
+        with pytest.raises(FetchError, match="Challenge not solved"):
             fetch_html("https://example.com")
 
     @patch("src.scraper.time.sleep")
-    @patch("src.scraper.cffi_requests.get")
-    def test_fetch_html_raises_after_all_retries(self, mock_get, mock_sleep):
-        mock_get.side_effect = ConnectionError("fail")
+    @patch("src.scraper.requests.post")
+    def test_fetch_html_retries_on_connection_error(self, mock_post, mock_sleep):
+        mock_post.side_effect = ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
             fetch_html("https://example.com")
+        assert mock_post.call_count == 3  # MAX_RETRIES
 
 
 class TestGetCurrentValue:
@@ -115,7 +112,7 @@ class TestGetCurrentValue:
     def test_returns_last_value(self, mock_fetch):
         mock_fetch.return_value = (FIXTURES / "normal_response.html").read_text()
         value = get_current_value("https://example.com")
-        assert value == 12
+        assert value == 2  # last RSC data point
 
     @patch("src.scraper.fetch_html")
     def test_returns_high_value(self, mock_fetch):
