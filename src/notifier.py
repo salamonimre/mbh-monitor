@@ -78,6 +78,17 @@ def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
     return _send_telegram(message, **kwargs)
 
 
+def send_heartbeat(current_value: int, threshold: int, last_checked: str, **kwargs) -> bool:
+    """Send daily heartbeat status message."""
+    message = (
+        f"<b>MBH Monitor heartbeat</b>\n\n"
+        f"Aktuális reports: <b>{current_value}</b>\n"
+        f"Küszöb: {threshold}\n"
+        f"Utolsó ellenőrzés: {last_checked}"
+    )
+    return _send_telegram(message, **kwargs)
+
+
 def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
     """Alert about consecutive fetch failures."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

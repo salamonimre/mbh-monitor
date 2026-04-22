@@ -17,6 +17,8 @@ class TestState:
         assert s.alert_active is False
         assert s.alert_started_at is None
         assert s.consecutive_fetch_failures == 0
+        assert s.error_alert_sent is False
+        assert s.last_heartbeat_date is None
 
     def test_to_dict_and_back(self):
         now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=timezone.utc)

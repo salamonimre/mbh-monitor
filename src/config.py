@@ -13,7 +13,7 @@ DOWNDETECTOR_URL: str = os.environ.get(
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-ALERT_THRESHOLD: int = int(os.environ.get("ALERT_THRESHOLD", "30"))
+ALERT_THRESHOLD: int = int(os.environ.get("ALERT_THRESHOLD", "10"))
 
 STATE_FILE: str = os.environ.get("STATE_FILE", "state.json")
 
@@ -28,6 +28,9 @@ MAX_RETRIES: int = 3
 RETRY_BACKOFF_BASE: float = 2.0
 
 CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3
+
+HEARTBEAT_ENABLED: bool = os.environ.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
+HEARTBEAT_HOUR: int = int(os.environ.get("HEARTBEAT_HOUR", "9"))
 
 
 def validate() -> list[str]:

@@ -1,6 +1,6 @@
 # MBH Bank Downdetector Monitor
 
-Ez a projekt 5 percenként lekérdezi az [MBH Bank Downdetector oldalt](https://downdetector.hu/problema/mbh-bank/), és Telegram értesítést küld, ha a bejelentett hibák száma meghalad egy konfigurálható küszöböt (alapértelmezésben 30).
+Ez a projekt 30 percenként lekérdezi az [MBH Bank Downdetector oldalt](https://downdetector.hu/problema/mbh-bank/), és Telegram értesítést küld, ha a bejelentett hibák száma meghalad egy konfigurálható küszöböt (alapértelmezésben 10).
 
 ## Gyors áttekintés
 
@@ -30,7 +30,7 @@ mbh-monitor/
 │   └── fixtures/                # Mentett HTML mintaadatok teszteléshez
 ├── .github/
 │   └── workflows/
-│       └── monitor.yml          # 5 percenkénti cron
+│       └── monitor.yml          # 30 percenkénti cron
 ├── state.json                   # Állapot (auto-commitelt)
 ├── requirements.txt
 └── .claude/
@@ -69,14 +69,14 @@ A projekten egy kis "csapat" dolgozik, mindegyiknek megvan a saját felelősség
 A `main.py` minden indításnál ugyanazt csinálja: lekér, összehasonlít, értesít ha kell, állapotot frissít. Nincs rejtett állapot a memóriában.
 
 ### 2. Duplikáció-mentes riasztás
-Csak akkor küld riasztást, amikor **átlépi** a küszöböt (előző érték ≤ 30, új > 30). Helyreállás külön üzenet. Ezt a `state.json` biztosítja.
+Csak akkor küld riasztást, amikor **átlépi** a küszöböt (előző érték ≤ küszöb, új > küszöb). Helyreállás külön üzenet. Ezt a `state.json` biztosítja.
 
 ### 3. Graceful failure
 Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik, értesít róla. Monitoring dashboard nélkül ez a legolcsóbb "van-e baj" jelzés.
 
 ### 4. Scraping respectful
 - User-Agent reális
-- 5 percnél gyakrabban SOHA nem kérdez le
+- 30 percnél gyakrabban SOHA nem kérdez le
 - Ha 429-et kapunk, exponenciális backoff
 
 ### 5. Változásra érzékeny
@@ -107,11 +107,13 @@ gh workflow run monitor.yml
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | igen | @BotFather által adott token |
 | `TELEGRAM_CHAT_ID` | igen | A saját chat ID-d (@userinfobot ad meg) |
-| `ALERT_THRESHOLD` | nem | Küszöbérték, default 30 |
+| `ALERT_THRESHOLD` | nem | Küszöbérték, default 10 |
 | `DOWNDETECTOR_URL` | nem | Default: MBH Bank URL |
+| `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
+| `HEARTBEAT_HOUR` | nem | Heartbeat órája (Budapest TZ), default `9` |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
 
 ## Jogi figyelmeztetés
 
-A Downdetector Fair Use szabályzata kereskedelmi célú scraping-et nem enged. Ez a projekt **kizárólag személyes monitorozásra készült**, alacsony frekvenciával (5 percenként egy kérés). Nyilvános szolgáltatásként vagy kereskedelmi célra nem szabad üzemeltetni – ahhoz a hivatalos (fizetős) Ookla Enterprise API kell.
+A Downdetector Fair Use szabályzata kereskedelmi célú scraping-et nem enged. Ez a projekt **kizárólag személyes monitorozásra készült**, alacsony frekvenciával (30 percenként egy kérés). Nyilvános szolgáltatásként vagy kereskedelmi célra nem szabad üzemeltetni – ahhoz a hivatalos (fizetős) Ookla Enterprise API kell.

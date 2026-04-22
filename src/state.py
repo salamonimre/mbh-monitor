@@ -18,6 +18,8 @@ class State:
     alert_active: bool = False
     alert_started_at: datetime | None = None
     consecutive_fetch_failures: int = 0
+    error_alert_sent: bool = False
+    last_heartbeat_date: str | None = None  # "YYYY-MM-DD"
 
     def to_dict(self) -> dict:
         d = asdict(self)
