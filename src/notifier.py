@@ -1,0 +1,91 @@
+"""Telegram notification sender."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+import requests
+
+from src import config
+
+logger = logging.getLogger(__name__)
+
+TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+
+
+def _send_telegram(
+    message: str,
+    *,
+    token: str | None = None,
+    chat_id: str | None = None,
+    session: requests.Session | None = None,
+) -> bool:
+    """Send a message via Telegram bot API. Returns True on success."""
+    token = token or config.TELEGRAM_BOT_TOKEN
+    chat_id = chat_id or config.TELEGRAM_CHAT_ID
+    sess = session or requests.Session()
+
+    url = TELEGRAM_API_URL.format(token=token)
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    for attempt in range(config.MAX_RETRIES):
+        try:
+            resp = sess.post(url, json=payload, timeout=config.HTTP_TIMEOUT)
+            if resp.status_code == 200:
+                logger.info("Telegram message sent successfully")
+                return True
+            logger.warning(
+                "Telegram API returned %d: %s (attempt %d)",
+                resp.status_code,
+                resp.text[:200],
+                attempt + 1,
+            )
+        except requests.RequestException as exc:
+            logger.warning("Telegram send failed (attempt %d): %s", attempt + 1, exc)
+
+    logger.error("Failed to send Telegram message after %d attempts", config.MAX_RETRIES)
+    return False
+
+
+def send_alert(current_value: int, threshold: int, **kwargs) -> bool:
+    """Send threshold-crossed alert."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    message = (
+        f"🚨 <b>MBH Bank – Downdetector riasztás</b>\n\n"
+        f"Bejelentett hibák száma: <b>{current_value}</b> (küszöb: {threshold})\n"
+        f"Időpont: {now}\n\n"
+        f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
+    )
+    return _send_telegram(message, **kwargs)
+
+
+def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
+    """Send recovery notification."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    message = (
+        f"✅ <b>MBH Bank – Helyreállás</b>\n\n"
+        f"Bejelentett hibák száma: <b>{current_value}</b> (küszöb: {threshold})\n"
+        f"A hibaszám visszatért a normális szintre.\n"
+        f"Időpont: {now}\n\n"
+        f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
+    )
+    return _send_telegram(message, **kwargs)
+
+
+def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
+    """Alert about consecutive fetch failures."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    message = (
+        f"⚠️ <b>MBH Monitor – Scraping hiba</b>\n\n"
+        f"Egymás utáni sikertelen lekérdezések: <b>{failures}</b>\n"
+        f"Utolsó hiba: <code>{error[:200]}</code>\n"
+        f"Időpont: {now}\n\n"
+        f"A monitor nem tud adatot lekérdezni. Ellenőrizd a logokat."
+    )
+    return _send_telegram(message, **kwargs)
