@@ -4,9 +4,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
-from src.scraper import ParseError, ReportPoint, parse_reports, fetch_html, get_current_value
+from src.scraper import FetchError, ParseError, ReportPoint, parse_reports, fetch_html, get_current_value
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -55,41 +54,47 @@ class TestParseReports:
 
 
 class TestFetchHtml:
-    @patch("src.scraper.requests.Session")
-    def test_fetch_html_success(self, mock_session_cls):
-        mock_session = MagicMock()
+    @patch("src.scraper.cffi_requests.get")
+    def test_fetch_html_success(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = "<html>ok</html>"
-        mock_resp.raise_for_status = MagicMock()
-        mock_session.get.return_value = mock_resp
+        mock_get.return_value = mock_resp
 
-        result = fetch_html("https://example.com", session=mock_session)
+        result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
+        mock_get.assert_called_once()
 
     @patch("src.scraper.time.sleep")
-    @patch("src.scraper.requests.Session")
-    def test_fetch_html_retries_on_429(self, mock_session_cls, mock_sleep):
-        mock_session = MagicMock()
+    @patch("src.scraper.cffi_requests.get")
+    def test_fetch_html_retries_on_429(self, mock_get, mock_sleep):
         resp_429 = MagicMock()
         resp_429.status_code = 429
         resp_200 = MagicMock()
         resp_200.status_code = 200
         resp_200.text = "<html>ok</html>"
-        resp_200.raise_for_status = MagicMock()
-        mock_session.get.side_effect = [resp_429, resp_200]
+        mock_get.side_effect = [resp_429, resp_200]
 
-        result = fetch_html("https://example.com", session=mock_session)
+        result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
         assert mock_sleep.called
 
-    @patch("src.scraper.time.sleep")
-    def test_fetch_html_raises_after_all_retries(self, mock_sleep):
-        mock_session = MagicMock()
-        mock_session.get.side_effect = requests.ConnectionError("fail")
+    @patch("src.scraper.cffi_requests.get")
+    def test_fetch_html_raises_on_403(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_get.return_value = mock_resp
 
-        with pytest.raises(requests.ConnectionError):
-            fetch_html("https://example.com", session=mock_session)
+        with pytest.raises(FetchError, match="403"):
+            fetch_html("https://example.com")
+
+    @patch("src.scraper.time.sleep")
+    @patch("src.scraper.cffi_requests.get")
+    def test_fetch_html_raises_after_all_retries(self, mock_get, mock_sleep):
+        mock_get.side_effect = ConnectionError("fail")
+
+        with pytest.raises(ConnectionError):
+            fetch_html("https://example.com")
 
 
 class TestGetCurrentValue:

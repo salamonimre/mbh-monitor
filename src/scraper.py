@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
 
 from src import config
 
@@ -21,37 +22,46 @@ class ParseError(Exception):
     """Raised when no parse strategy can extract data."""
 
 
+class FetchError(Exception):
+    """Raised when all fetch attempts fail."""
+
+
 @dataclass
 class ReportPoint:
     timestamp: datetime
     value: int
 
 
-def fetch_html(url: str, *, timeout: int | None = None, session: requests.Session | None = None) -> str:
-    """Fetch HTML from URL with retries and backoff."""
-    sess = session or requests.Session()
+def fetch_html(url: str, *, timeout: int | None = None) -> str:
+    """Fetch HTML from URL using curl_cffi (Cloudflare bypass) with retries."""
     timeout = timeout or config.HTTP_TIMEOUT
-    headers = {"User-Agent": config.USER_AGENT}
 
     last_exc: Exception | None = None
     for attempt in range(config.MAX_RETRIES):
         try:
-            resp = sess.get(url, headers=headers, timeout=timeout)
+            resp = cffi_requests.get(
+                url,
+                impersonate="chrome",
+                timeout=timeout,
+            )
             if resp.status_code == 429:
                 wait = config.RETRY_BACKOFF_BASE ** (attempt + 1)
                 logger.warning("429 received, backing off %.1fs", wait)
                 time.sleep(wait)
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise FetchError(f"HTTP {resp.status_code} for {url}")
             return resp.text
-        except requests.RequestException as exc:
+        except FetchError:
+            raise
+        except Exception as exc:
             last_exc = exc
             if attempt < config.MAX_RETRIES - 1:
                 wait = config.RETRY_BACKOFF_BASE ** (attempt + 1)
                 logger.warning("Attempt %d failed (%s), retrying in %.1fs", attempt + 1, exc, wait)
                 time.sleep(wait)
 
-    raise last_exc or requests.RequestException("All retries exhausted")
+    raise last_exc or FetchError("All retries exhausted")
 
 
 def _parse_json_strategy(html: str) -> list[ReportPoint]:
@@ -124,12 +134,10 @@ def parse_reports(html: str) -> list[ReportPoint]:
 
 def get_current_value(
     url: str | None = None,
-    *,
-    session: requests.Session | None = None,
 ) -> int:
     """Fetch and return the current report count. Main entry point for scraper."""
     url = url or config.DOWNDETECTOR_URL
-    html = fetch_html(url, session=session)
+    html = fetch_html(url)
     points = parse_reports(html)
     # Return the most recent (last) value
     return points[-1].value
