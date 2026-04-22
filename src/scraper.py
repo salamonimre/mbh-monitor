@@ -132,13 +132,18 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
                 logger.warning("RSC snippet: ...%s...", snippet)
             continue
 
+        logger.info("RSC strategy: dataPoints regex matched, group(1) length: %d", len(match.group(1)))
         try:
             arr_str = "[" + match.group(1) + "]"
             data_points = json.loads(arr_str)
-        except json.JSONDecodeError:
+            logger.info("RSC strategy: parsed %d data points from JSON", len(data_points))
+        except json.JSONDecodeError as e:
+            logger.warning("RSC strategy: JSON parse failed: %s", e)
+            logger.warning("RSC strategy: first 300 chars of arr_str: %s", arr_str[:300])
             continue
 
         if not data_points:
+            logger.warning("RSC strategy: data_points array is empty")
             continue
 
         points = []
@@ -147,7 +152,8 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
                 ts = datetime.fromisoformat(dp["timestampUtc"].replace("+00:00", "+00:00"))
                 value = int(dp["reportsValue"])
                 points.append(ReportPoint(timestamp=ts, value=value))
-            except (KeyError, ValueError):
+            except (KeyError, ValueError) as e:
+                logger.warning("RSC strategy: point parse failed: %s (dp=%s)", e, dp)
                 continue
 
         if points:
