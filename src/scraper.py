@@ -30,35 +30,56 @@ class ReportPoint:
     value: int
 
 
-def fetch_html(url: str, *, timeout: int | None = None) -> str:
-    """Fetch HTML via FlareSolverr (bypasses Cloudflare) with retries."""
-    timeout = timeout or config.HTTP_TIMEOUT
+def _get_cf_cookies(url: str, timeout: int) -> dict[str, str]:
+    """Use FlareSolverr to solve Cloudflare and return bypass cookies."""
     flaresolverr_url = config.FLARESOLVERR_URL
-
     payload = {
         "cmd": "request.get",
         "url": url,
         "maxTimeout": timeout * 1000,
     }
 
+    resp = requests.post(flaresolverr_url, json=payload, timeout=timeout + 30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if data.get("status") != "ok":
+        raise FetchError(f"FlareSolverr error: {data.get('message', 'unknown')}")
+
+    cookies = {}
+    for cookie in data["solution"].get("cookies", []):
+        cookies[cookie["name"]] = cookie["value"]
+
+    user_agent = data["solution"].get("userAgent", "")
+    logger.info("Got %d cookies from FlareSolverr", len(cookies))
+    return cookies, user_agent
+
+
+def fetch_html(url: str, *, timeout: int | None = None) -> str:
+    """Fetch raw HTML: get Cloudflare cookies via FlareSolverr, then fetch with requests.
+
+    This two-step approach ensures we get the raw SSR HTML (with RSC data)
+    rather than the post-hydration DOM.
+    """
+    timeout = timeout or config.HTTP_TIMEOUT
+
     last_exc: Exception | None = None
     for attempt in range(config.MAX_RETRIES):
         try:
-            resp = requests.post(
-                flaresolverr_url,
-                json=payload,
-                timeout=timeout + 30,  # extra time for solver
-            )
+            # Step 1: Get Cloudflare bypass cookies
+            cookies, user_agent = _get_cf_cookies(url, timeout)
+
+            # Step 2: Fetch raw HTML with those cookies
+            headers = {"User-Agent": user_agent} if user_agent else {}
+            resp = requests.get(url, cookies=cookies, headers=headers, timeout=timeout)
+
+            if resp.status_code == 403:
+                raise FetchError(f"HTTP 403 despite cookies – Cloudflare may need re-solving")
             resp.raise_for_status()
-            data = resp.json()
 
-            if data.get("status") == "ok":
-                html = data["solution"]["response"]
-                logger.info("FlareSolverr returned %d bytes", len(html))
-                return html
-
-            error_msg = data.get("message", "Unknown FlareSolverr error")
-            raise FetchError(f"FlareSolverr error: {error_msg}")
+            html = resp.text
+            logger.info("Fetched %d bytes of raw HTML", len(html))
+            return html
 
         except FetchError:
             raise

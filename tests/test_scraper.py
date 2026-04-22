@@ -69,42 +69,35 @@ class TestParseReports:
 
 
 class TestFetchHtml:
-    @patch("src.scraper.requests.post")
-    def test_fetch_html_success(self, mock_post):
+    @patch("src.scraper.requests.get")
+    @patch("src.scraper._get_cf_cookies")
+    def test_fetch_html_success(self, mock_cookies, mock_get):
+        mock_cookies.return_value = ({"cf_clearance": "abc"}, "Mozilla/5.0")
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "status": "ok",
-            "solution": {"response": "<html>ok</html>"},
-        }
+        mock_resp.text = "<html>ok</html>"
         mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
+        mock_get.return_value = mock_resp
 
         result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
+        mock_get.assert_called_once()
 
-    @patch("src.scraper.requests.post")
-    def test_fetch_html_flaresolverr_error(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "status": "error",
-            "message": "Challenge not solved",
-        }
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
+    @patch("src.scraper._get_cf_cookies")
+    def test_fetch_html_flaresolverr_error(self, mock_cookies):
+        mock_cookies.side_effect = FetchError("Challenge not solved")
 
         with pytest.raises(FetchError, match="Challenge not solved"):
             fetch_html("https://example.com")
 
     @patch("src.scraper.time.sleep")
-    @patch("src.scraper.requests.post")
-    def test_fetch_html_retries_on_connection_error(self, mock_post, mock_sleep):
-        mock_post.side_effect = ConnectionError("fail")
+    @patch("src.scraper._get_cf_cookies")
+    def test_fetch_html_retries_on_connection_error(self, mock_cookies, mock_sleep):
+        mock_cookies.side_effect = ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
             fetch_html("https://example.com")
-        assert mock_post.call_count == 3  # MAX_RETRIES
+        assert mock_cookies.call_count == 3  # MAX_RETRIES
 
 
 class TestGetCurrentValue:
