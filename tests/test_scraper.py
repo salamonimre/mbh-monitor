@@ -11,21 +11,23 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class TestParseReports:
-    def test_parse_normal_response_json_strategy(self):
+    def test_parse_normal_response_aria_label(self):
         html = (FIXTURES / "normal_response.html").read_text()
         reports = parse_reports(html)
-        assert len(reports) == 5
-        assert all(isinstance(r, ReportPoint) for r in reports)
-        assert all(r.value >= 0 for r in reports)
-        # Should be sorted by timestamp
-        timestamps = [r.timestamp for r in reports]
-        assert timestamps == sorted(timestamps)
+        assert len(reports) == 1
+        assert reports[0].value == 12
 
     def test_parse_high_alert_response(self):
         html = (FIXTURES / "high_alert_response.html").read_text()
         reports = parse_reports(html)
         assert len(reports) > 0
         assert reports[-1].value == 152
+
+    def test_parse_no_problems_heading_only(self):
+        html = (FIXTURES / "no_problems_heading_only.html").read_text()
+        reports = parse_reports(html)
+        assert len(reports) == 1
+        assert reports[0].value == 0
 
     def test_parse_empty_response_raises_parse_error(self):
         html = (FIXTURES / "empty_response.html").read_text()
@@ -51,6 +53,17 @@ class TestParseReports:
         reports = parse_reports(html)
         assert len(reports) == 1
         assert reports[0].value == 42
+
+    def test_aria_label_strategy_priority(self):
+        """aria-label should take priority over heading."""
+        html = """
+        <html><body>
+        <h1>User reports show <span>no current problems</span></h1>
+        <div aria-label="Reports chart for the last 24 hours with a peak of 5 reports, status: no problems"></div>
+        </body></html>
+        """
+        reports = parse_reports(html)
+        assert reports[0].value == 5  # aria-label wins, not 0 from heading
 
 
 class TestFetchHtml:
@@ -102,7 +115,7 @@ class TestGetCurrentValue:
     def test_returns_last_value(self, mock_fetch):
         mock_fetch.return_value = (FIXTURES / "normal_response.html").read_text()
         value = get_current_value("https://example.com")
-        assert value == 12  # last value in the fixture
+        assert value == 12
 
     @patch("src.scraper.fetch_html")
     def test_returns_high_value(self, mock_fetch):

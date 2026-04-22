@@ -64,13 +64,38 @@ def fetch_html(url: str, *, timeout: int | None = None) -> str:
     raise last_exc or FetchError("All retries exhausted")
 
 
+def _parse_aria_label_strategy(html: str) -> list[ReportPoint]:
+    """Extract peak report count from chart aria-label (Next.js Downdetector format).
+
+    Looks for: aria-label="Reports chart for the last 24 hours with a peak of 15 reports, status: ..."
+    """
+    match = re.search(
+        r'aria-label="Reports chart[^"]*?peak of (\d+) reports',
+        html,
+        re.IGNORECASE,
+    )
+    if match:
+        value = int(match.group(1))
+        return [ReportPoint(timestamp=datetime.now(timezone.utc), value=value)]
+    return []
+
+
+def _parse_heading_strategy(html: str) -> list[ReportPoint]:
+    """Extract status from the main heading text.
+
+    'no current problems' → 0 reports (safe baseline).
+    """
+    if re.search(r'no current problems', html, re.IGNORECASE):
+        return [ReportPoint(timestamp=datetime.now(timezone.utc), value=0)]
+    return []
+
+
 def _parse_json_strategy(html: str) -> list[ReportPoint]:
-    """Try to extract report data from embedded JSON/script tags."""
+    """Try to extract report data from embedded JSON/script tags (legacy format)."""
     soup = BeautifulSoup(html, "html.parser")
 
     for script in soup.find_all("script"):
         text = script.string or ""
-        # Downdetector embeds chart data as JSON arrays
         match = re.search(r'xAxis.*?categories["\s:]+\[(.*?)\]', text, re.DOTALL)
         values_match = re.search(r'series.*?data["\s:]+\[([\d,\s]+)\]', text, re.DOTALL)
         if match and values_match:
@@ -94,7 +119,6 @@ def _parse_json_strategy(html: str) -> list[ReportPoint]:
 
 def _parse_regex_strategy(html: str) -> list[ReportPoint]:
     """Fallback: extract the main visible report count via regex."""
-    # Look for the prominent report count on the page
     patterns = [
         r'class="[^"]*current-number[^"]*"[^>]*>\s*(\d+)',
         r'class="[^"]*report-count[^"]*"[^>]*>\s*(\d+)',
@@ -111,24 +135,36 @@ def _parse_regex_strategy(html: str) -> list[ReportPoint]:
 
 
 def parse_reports(html: str) -> list[ReportPoint]:
-    """Parse HTML using strategy chain: JSON -> regex -> error.
+    """Parse HTML using strategy chain: aria-label -> heading -> JSON -> regex -> error.
 
     Returns list of ReportPoint sorted by timestamp.
     Raises ParseError if no strategy succeeds.
     """
-    # Strategy 1: JSON from script tags
+    # Strategy 1: aria-label on chart (current Next.js format)
+    points = _parse_aria_label_strategy(html)
+    if points:
+        logger.info("Parsed via aria-label strategy: %d reports", points[-1].value)
+        return points
+
+    # Strategy 2: "no current problems" heading
+    points = _parse_heading_strategy(html)
+    if points:
+        logger.info("Parsed via heading strategy: no current problems")
+        return points
+
+    # Strategy 3: JSON from script tags (legacy)
     points = _parse_json_strategy(html)
     if points:
         logger.info("Parsed %d points via JSON strategy", len(points))
         return points
 
-    # Strategy 2: regex fallback
+    # Strategy 4: regex fallback
     points = _parse_regex_strategy(html)
     if points:
         logger.warning("Parsed via regex fallback (%d points)", len(points))
         return points
 
-    # Strategy 3: fail
+    # Strategy 5: fail
     raise ParseError("No parse strategy could extract report data from HTML")
 
 
