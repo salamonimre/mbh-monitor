@@ -109,62 +109,46 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
     pushes = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
     logger.info("RSC strategy: found %d __next_f.push payloads", len(pushes))
 
+    decoder = json.JSONDecoder()
+
     for push in pushes:
         # Unescape RSC content
         content = push.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
 
         if '"reportsValue"' not in content:
             continue
-        logger.info("RSC strategy: found payload with reportsValue (%d chars)", len(content))
 
-        # Extract dataPoints array
-        match = re.search(
-            r'"dataPoints":\s*\[(.*?)\]\s*\}',
-            content,
-            re.DOTALL,
-        )
-        if not match:
-            logger.warning("RSC strategy: reportsValue found but no dataPoints array match")
-            # Log a snippet around reportsValue for debugging
-            idx = content.find('"reportsValue"')
-            if idx >= 0:
-                snippet = content[max(0, idx - 100):idx + 200]
-                logger.warning("RSC snippet: ...%s...", snippet)
+        # Find "dataPoints" key and parse the array using raw_decode
+        # to handle extra fields in the parent object
+        dp_key = '"dataPoints"'
+        idx = content.find(dp_key)
+        if idx < 0:
             continue
 
-        logger.info("RSC strategy: dataPoints regex matched, group(1) length: %d", len(match.group(1)))
+        # Find the '[' that starts the array
+        bracket_idx = content.find('[', idx + len(dp_key))
+        if bracket_idx < 0:
+            continue
+
         try:
-            arr_str = "[" + match.group(1) + "]"
-            data_points = json.loads(arr_str)
-            logger.info("RSC strategy: parsed %d data points from JSON", len(data_points))
-        except json.JSONDecodeError as e:
-            logger.warning("RSC strategy: JSON parse failed: %s", e)
-            logger.warning("RSC strategy: first 300 chars of arr_str: %s", arr_str[:300])
+            data_points, _ = decoder.raw_decode(content, bracket_idx)
+        except json.JSONDecodeError:
             continue
 
-        if not data_points:
-            logger.warning("RSC strategy: data_points array is empty")
+        if not isinstance(data_points, list) or not data_points:
             continue
 
         points = []
         for dp in data_points:
             try:
-                ts = datetime.fromisoformat(dp["timestampUtc"].replace("+00:00", "+00:00"))
+                ts = datetime.fromisoformat(dp["timestampUtc"])
                 value = int(dp["reportsValue"])
                 points.append(ReportPoint(timestamp=ts, value=value))
-            except (KeyError, ValueError) as e:
-                logger.warning("RSC strategy: point parse failed: %s (dp=%s)", e, dp)
+            except (KeyError, ValueError):
                 continue
 
         if points:
             return sorted(points, key=lambda p: p.timestamp)
-
-    # Debug: check if reportsValue exists anywhere in the HTML
-    if "reportsValue" in html:
-        logger.warning("RSC strategy: reportsValue exists in HTML but not matched by push regex")
-        idx = html.find("reportsValue")
-        snippet = html[max(0, idx - 200):idx + 200]
-        logger.warning("Raw HTML snippet: ...%s...", snippet)
 
     return []
 
