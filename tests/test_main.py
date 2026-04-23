@@ -181,10 +181,10 @@ class TestGetHeartbeatHour:
             mock_config.HEARTBEAT_HOURS = [9, 19]
             assert _get_heartbeat_hour(state, budapest_now) is None
 
-    def test_past_30_min_window(self):
-        """9:35 Budapest -> None (past the 30-min window)."""
+    def test_next_hour_outside_window(self):
+        """10:00 Budapest -> None (not a configured hour)."""
         state = State(heartbeat_sent={})
-        budapest_now = datetime(2026, 7, 15, 9, 35, tzinfo=BUDAPEST_TZ)
+        budapest_now = datetime(2026, 7, 15, 10, 0, tzinfo=BUDAPEST_TZ)
         with patch("src.main.config") as mock_config:
             mock_config.HEARTBEAT_ENABLED = True
             mock_config.HEARTBEAT_HOURS = [9, 19]

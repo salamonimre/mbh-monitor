@@ -92,7 +92,7 @@ def _get_heartbeat_hour(state: State, budapest_now: datetime) -> int | None:
     today_str = budapest_now.strftime("%Y-%m-%d")
 
     for hour in config.HEARTBEAT_HOURS:
-        if budapest_now.hour != hour or budapest_now.minute >= 30:
+        if budapest_now.hour != hour:
             continue
         # Check if already sent for this hour today
         hour_key = str(hour)
