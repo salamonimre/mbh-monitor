@@ -204,9 +204,13 @@ def parse_reports(html: str) -> list[ReportPoint]:
     raise ParseError("No parse strategy could extract report data from HTML")
 
 
-def get_current_value(url: str | None = None) -> int:
-    """Fetch and return the current report count. Main entry point."""
+def fetch_report_data(url: str | None = None) -> list[ReportPoint]:
+    """Fetch and return all chart data points. Main entry point."""
     url = url or config.DOWNDETECTOR_URL
     html = fetch_html(url)
-    points = parse_reports(html)
-    return points[-1].value
+    return parse_reports(html)
+
+
+def get_current_value(url: str | None = None) -> int:
+    """Fetch and return the current report count (last data point)."""
+    return fetch_report_data(url)[-1].value

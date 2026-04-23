@@ -15,7 +15,7 @@ from src.notifier import (
     send_heartbeat,
     send_recovery,
 )
-from src.scraper import ParseError, get_current_value
+from src.scraper import ParseError, ReportPoint, fetch_report_data
 from src.state import State, load, save
 
 logging.basicConfig(
@@ -54,11 +54,29 @@ def _reset_daily_stats_if_needed(state: State, today_str: str) -> None:
         state.daily_alert_times = []
 
 
-def _update_daily_stats(state: State, current_value: int, budapest_now: datetime) -> None:
-    """Update daily max if current value is higher."""
-    if current_value > state.daily_max_value:
-        state.daily_max_value = current_value
-        state.daily_max_time = budapest_now.strftime("%H:%M")
+def _update_daily_stats(state: State, max_value: int, max_time: str | None) -> None:
+    """Update daily max if the given value is higher."""
+    if max_value > state.daily_max_value:
+        state.daily_max_value = max_value
+        state.daily_max_time = max_time
+
+
+def _get_chart_max_today(
+    points: list[ReportPoint], budapest_now: datetime,
+) -> tuple[int, str | None]:
+    """Find the max value from today's chart data points (Budapest TZ)."""
+    today_str = budapest_now.strftime("%Y-%m-%d")
+    max_value = 0
+    max_time: str | None = None
+    for p in points:
+        ts = p.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts_bud = ts.astimezone(BUDAPEST_TZ)
+        if ts_bud.strftime("%Y-%m-%d") == today_str and p.value > max_value:
+            max_value = p.value
+            max_time = ts_bud.strftime("%H:%M")
+    return max_value, max_time
 
 
 def _get_heartbeat_hour(state: State, budapest_now: datetime) -> int | None:
@@ -109,9 +127,10 @@ def run(state_path: str | None = None) -> int:
     # Reset daily stats if date changed
     _reset_daily_stats_if_needed(state, today_str)
 
-    # Attempt to fetch current value
+    # Attempt to fetch report data
     try:
-        current_value = get_current_value()
+        points = fetch_report_data()
+        current_value = points[-1].value
         state.consecutive_fetch_failures = 0
         state.error_alert_sent = False
         logger.info("Current report count: %d (threshold: %d)", current_value, config.ALERT_THRESHOLD)
@@ -132,8 +151,12 @@ def run(state_path: str | None = None) -> int:
         save(state, state_path)
         return 0  # Not catastrophic – we'll retry next run
 
-    # Update daily stats
-    _update_daily_stats(state, current_value, budapest_now)
+    # Update daily stats from chart data (covers spikes between runs)
+    chart_max, chart_max_time = _get_chart_max_today(points, budapest_now)
+    if current_value > chart_max:
+        chart_max = current_value
+        chart_max_time = budapest_now.strftime("%H:%M")
+    _update_daily_stats(state, chart_max, chart_max_time)
 
     # Decide and act
     action = decide_action(state, current_value, config.ALERT_THRESHOLD)

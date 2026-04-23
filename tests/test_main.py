@@ -1,5 +1,7 @@
 """Tests for main module – alert state machine, heartbeat, daily summary, error alerting."""
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,11 +16,19 @@ from src.main import (
     _is_summary_hour,
     _reset_daily_stats_if_needed,
     _update_daily_stats,
+    _get_chart_max_today,
 )
+from src.scraper import ReportPoint
 from src.state import State, load, save
 
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _make_points(value: int, ts: datetime | None = None) -> list[ReportPoint]:
+    """Create a single-point list for simple test cases."""
+    ts = ts or datetime(2026, 7, 15, 11, 0, 0, tzinfo=timezone.utc)
+    return [ReportPoint(timestamp=ts, value=value)]
 
 
 class TestDecideAction:
@@ -61,25 +71,66 @@ class TestDailyStats:
 
     def test_update_max_when_higher(self):
         state = State(daily_max_value=10, daily_max_time="10:00")
-        budapest_now = datetime(2026, 7, 15, 14, 30, tzinfo=BUDAPEST_TZ)
-        _update_daily_stats(state, 25, budapest_now)
+        _update_daily_stats(state, 25, "14:30")
         assert state.daily_max_value == 25
         assert state.daily_max_time == "14:30"
 
     def test_no_update_when_lower(self):
         state = State(daily_max_value=30, daily_max_time="10:00")
-        budapest_now = datetime(2026, 7, 15, 14, 30, tzinfo=BUDAPEST_TZ)
-        _update_daily_stats(state, 15, budapest_now)
+        _update_daily_stats(state, 15, "14:30")
         assert state.daily_max_value == 30
         assert state.daily_max_time == "10:00"
 
     def test_update_on_equal(self):
         """Equal value should not update (only strictly greater)."""
         state = State(daily_max_value=10, daily_max_time="10:00")
-        budapest_now = datetime(2026, 7, 15, 14, 30, tzinfo=BUDAPEST_TZ)
-        _update_daily_stats(state, 10, budapest_now)
+        _update_daily_stats(state, 10, "14:30")
         assert state.daily_max_value == 10
         assert state.daily_max_time == "10:00"
+
+
+class TestGetChartMaxToday:
+    """Test chart max extraction from RSC data points."""
+
+    def test_finds_max_from_today(self):
+        budapest_now = datetime(2026, 7, 15, 13, 0, tzinfo=BUDAPEST_TZ)
+        points = [
+            ReportPoint(datetime(2026, 7, 15, 7, 0, tzinfo=timezone.utc), 2),   # 9:00 Budapest
+            ReportPoint(datetime(2026, 7, 15, 7, 41, tzinfo=timezone.utc), 5),  # 9:41 Budapest
+            ReportPoint(datetime(2026, 7, 15, 8, 0, tzinfo=timezone.utc), 1),   # 10:00 Budapest
+            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc), 0),  # 13:00 Budapest
+        ]
+        max_val, max_time = _get_chart_max_today(points, budapest_now)
+        assert max_val == 5
+        assert max_time == "09:41"
+
+    def test_ignores_yesterday_points(self):
+        budapest_now = datetime(2026, 7, 15, 13, 0, tzinfo=BUDAPEST_TZ)
+        points = [
+            ReportPoint(datetime(2026, 7, 14, 20, 0, tzinfo=timezone.utc), 50),  # Yesterday
+            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc), 3),   # Today
+        ]
+        max_val, max_time = _get_chart_max_today(points, budapest_now)
+        assert max_val == 3
+
+    def test_returns_zero_when_no_today_points(self):
+        budapest_now = datetime(2026, 7, 15, 1, 0, tzinfo=BUDAPEST_TZ)
+        points = [
+            ReportPoint(datetime(2026, 7, 13, 20, 0, tzinfo=timezone.utc), 50),
+        ]
+        max_val, max_time = _get_chart_max_today(points, budapest_now)
+        assert max_val == 0
+        assert max_time is None
+
+    def test_handles_naive_timestamps(self):
+        """Timestamps without tzinfo should be treated as UTC."""
+        budapest_now = datetime(2026, 7, 15, 13, 0, tzinfo=BUDAPEST_TZ)
+        points = [
+            ReportPoint(datetime(2026, 7, 15, 7, 30), 8),  # naive, assumed UTC -> 9:30 Budapest
+        ]
+        max_val, max_time = _get_chart_max_today(points, budapest_now)
+        assert max_val == 8
+        assert max_time == "09:30"
 
 
 class TestGetHeartbeatHour:
@@ -168,8 +219,9 @@ class TestIsSummaryHour:
 
 class TestRun:
     @patch("src.main.send_alert", return_value=True)
-    @patch("src.main.get_current_value", return_value=45)
-    def test_run_triggers_alert(self, mock_get, mock_alert, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_run_triggers_alert(self, mock_fetch, mock_alert, tmp_path):
+        mock_fetch.return_value = _make_points(45)
         state_path = tmp_path / "state.json"
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
@@ -185,8 +237,9 @@ class TestRun:
         mock_alert.assert_called_once_with(45, 30)
 
     @patch("src.main.send_recovery", return_value=True)
-    @patch("src.main.get_current_value", return_value=15)
-    def test_run_triggers_recovery(self, mock_get, mock_recovery, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_run_triggers_recovery(self, mock_fetch, mock_recovery, tmp_path):
+        mock_fetch.return_value = _make_points(15)
         state_path = tmp_path / "state.json"
         save(State(last_value=40, alert_active=True), state_path)
 
@@ -204,8 +257,9 @@ class TestRun:
         mock_recovery.assert_called_once_with(15, 30)
 
     @patch("src.main.send_alert")
-    @patch("src.main.get_current_value", return_value=10)
-    def test_run_no_notification_below_threshold(self, mock_get, mock_alert, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_run_no_notification_below_threshold(self, mock_fetch, mock_alert, tmp_path):
+        mock_fetch.return_value = _make_points(10)
         state_path = tmp_path / "state.json"
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
@@ -221,8 +275,8 @@ class TestRun:
         mock_alert.assert_not_called()
 
     @patch("src.main.send_fetch_failure_alert")
-    @patch("src.main.get_current_value", side_effect=Exception("Network error"))
-    def test_run_handles_fetch_failure(self, mock_get, mock_fail_alert, tmp_path):
+    @patch("src.main.fetch_report_data", side_effect=Exception("Network error"))
+    def test_run_handles_fetch_failure(self, mock_fetch, mock_fail_alert, tmp_path):
         state_path = tmp_path / "state.json"
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
@@ -244,9 +298,10 @@ class TestRun:
         assert result == 1
 
     @patch("src.main.send_alert", return_value=True)
-    @patch("src.main.get_current_value", return_value=45)
-    def test_run_tracks_daily_max_and_alert_time(self, mock_get, mock_alert, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_run_tracks_daily_max_and_alert_time(self, mock_fetch, mock_alert, tmp_path):
         """Alert should update daily_max and record alert time."""
+        mock_fetch.return_value = _make_points(45)
         state_path = tmp_path / "state.json"
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
@@ -263,13 +318,44 @@ class TestRun:
         assert loaded.daily_max_time is not None
         assert len(loaded.daily_alert_times) == 1
 
+    @patch("src.main.fetch_report_data")
+    def test_run_uses_chart_max_not_current(self, mock_fetch, tmp_path):
+        """Daily max should come from chart data, not just the current value."""
+        # Chart has a spike at 9:41 (value=15), current value is 2
+        mock_fetch.return_value = [
+            ReportPoint(datetime(2026, 7, 15, 7, 0, tzinfo=timezone.utc), 1),
+            ReportPoint(datetime(2026, 7, 15, 7, 41, tzinfo=timezone.utc), 15),
+            ReportPoint(datetime(2026, 7, 15, 8, 0, tzinfo=timezone.utc), 3),
+            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc), 2),
+        ]
+        state_path = tmp_path / "state.json"
+        fake_now = datetime(2026, 7, 15, 11, 0, 0, tzinfo=timezone.utc)  # 13:00 Budapest
+
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.datetime") as mock_dt:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            run(str(state_path))
+
+        loaded = load(state_path)
+        assert loaded.daily_max_value == 15
+        assert loaded.daily_max_time == "09:41"
+        assert loaded.last_value == 2  # current value is the last point
+
 
 class TestErrorAlerting:
     """Test the 3x consecutive failure -> 1x alert, then silence logic."""
 
     @patch("src.main.send_fetch_failure_alert", return_value=True)
-    @patch("src.main.get_current_value", side_effect=Exception("FlareSolverr down"))
-    def test_alert_sent_at_third_failure(self, mock_get, mock_fail_alert, tmp_path):
+    @patch("src.main.fetch_report_data", side_effect=Exception("FlareSolverr down"))
+    def test_alert_sent_at_third_failure(self, mock_fetch, mock_fail_alert, tmp_path):
         state_path = tmp_path / "state.json"
         save(State(consecutive_fetch_failures=2, error_alert_sent=False), state_path)
 
@@ -285,8 +371,8 @@ class TestErrorAlerting:
         assert "FlareSolverr down" in mock_fail_alert.call_args[0][1]
 
     @patch("src.main.send_fetch_failure_alert", return_value=True)
-    @patch("src.main.get_current_value", side_effect=Exception("Still broken"))
-    def test_no_spam_after_alert_sent(self, mock_get, mock_fail_alert, tmp_path):
+    @patch("src.main.fetch_report_data", side_effect=Exception("Still broken"))
+    def test_no_spam_after_alert_sent(self, mock_fetch, mock_fail_alert, tmp_path):
         state_path = tmp_path / "state.json"
         save(State(consecutive_fetch_failures=5, error_alert_sent=True), state_path)
 
@@ -301,8 +387,9 @@ class TestErrorAlerting:
         mock_fail_alert.assert_not_called()
 
     @patch("src.main.send_fetch_failure_alert")
-    @patch("src.main.get_current_value", return_value=5)
-    def test_success_resets_failure_state(self, mock_get, mock_fail_alert, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_success_resets_failure_state(self, mock_fetch, mock_fail_alert, tmp_path):
+        mock_fetch.return_value = _make_points(5)
         state_path = tmp_path / "state.json"
         save(State(consecutive_fetch_failures=4, error_alert_sent=True), state_path)
 
@@ -325,8 +412,9 @@ class TestHeartbeatIntegration:
     """Test heartbeat and daily summary within the full run flow."""
 
     @patch("src.main.send_heartbeat", return_value=True)
-    @patch("src.main.get_current_value", return_value=3)
-    def test_morning_heartbeat_sent(self, mock_get, mock_hb, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_morning_heartbeat_sent(self, mock_fetch, mock_hb, tmp_path):
+        mock_fetch.return_value = _make_points(3)
         state_path = tmp_path / "state.json"
         fake_now = datetime(2026, 7, 15, 7, 15, 0, tzinfo=timezone.utc)  # 9:15 Budapest
 
@@ -346,8 +434,9 @@ class TestHeartbeatIntegration:
         mock_hb.assert_called_once()
 
     @patch("src.main.send_daily_summary", return_value=True)
-    @patch("src.main.get_current_value", return_value=3)
-    def test_evening_summary_sent(self, mock_get, mock_summary, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_evening_summary_sent(self, mock_fetch, mock_summary, tmp_path):
+        mock_fetch.return_value = _make_points(3)
         state_path = tmp_path / "state.json"
         save(State(daily_max_value=42, daily_max_time="14:30",
                    daily_max_date="2026-07-15", daily_alert_times=["14:20"]),
@@ -375,8 +464,9 @@ class TestHeartbeatIntegration:
 
     @patch("src.main.send_heartbeat")
     @patch("src.main.send_daily_summary")
-    @patch("src.main.get_current_value", return_value=3)
-    def test_no_heartbeat_outside_windows(self, mock_get, mock_summary, mock_hb, tmp_path):
+    @patch("src.main.fetch_report_data")
+    def test_no_heartbeat_outside_windows(self, mock_fetch, mock_summary, mock_hb, tmp_path):
+        mock_fetch.return_value = _make_points(3)
         state_path = tmp_path / "state.json"
         fake_now = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)  # 14:00 Budapest
 
