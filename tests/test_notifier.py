@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_heartbeat, _send_telegram
+from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_heartbeat, send_daily_summary, _send_telegram
 
 
 class TestSendTelegram:
@@ -72,3 +72,21 @@ class TestAlertMessages:
         assert "10" in msg
         assert "09:15" in msg
         assert "heartbeat" in msg.lower()
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_daily_summary_with_alerts(self, mock_send):
+        result = send_daily_summary(8, 10, daily_max=25, daily_max_time="14:30", alert_times=["14:00", "14:30"])
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "25" in msg
+        assert "14:30" in msg
+        assert "14:00" in msg
+        assert "összefoglaló" in msg.lower()
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_daily_summary_no_alerts(self, mock_send):
+        result = send_daily_summary(3, 10, daily_max=7, daily_max_time="11:00", alert_times=[])
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "nem" in msg.lower()
+        assert "7" in msg

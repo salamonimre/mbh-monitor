@@ -30,7 +30,7 @@ RETRY_BACKOFF_BASE: float = 2.0
 CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3
 
 HEARTBEAT_ENABLED: bool = os.environ.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
-HEARTBEAT_HOUR: int = int(os.environ.get("HEARTBEAT_HOUR", "9"))
+HEARTBEAT_HOURS: list[int] = [int(h.strip()) for h in os.environ.get("HEARTBEAT_HOURS", "9,19").split(",")]
 
 
 def validate() -> list[str]:

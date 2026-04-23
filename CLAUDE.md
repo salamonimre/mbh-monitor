@@ -110,7 +110,7 @@ gh workflow run monitor.yml
 | `ALERT_THRESHOLD` | nem | Küszöbérték, default 10 |
 | `DOWNDETECTOR_URL` | nem | Default: MBH Bank URL |
 | `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
-| `HEARTBEAT_HOUR` | nem | Heartbeat órája (Budapest TZ), default `9` |
+| `HEARTBEAT_HOURS` | nem | Heartbeat órák vesszővel (Budapest TZ), default `9,19`. Az utolsó óra napi összefoglalót küld. |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
 

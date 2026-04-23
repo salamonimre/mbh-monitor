@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from src import config
-from src.notifier import send_alert, send_fetch_failure_alert, send_heartbeat, send_recovery
+from src.notifier import (
+    send_alert,
+    send_daily_summary,
+    send_fetch_failure_alert,
+    send_heartbeat,
+    send_recovery,
+)
 from src.scraper import ParseError, get_current_value
 from src.state import State, load, save
 
@@ -39,28 +45,49 @@ def decide_action(state: State, current_value: int, threshold: int) -> str:
     return "none"
 
 
-def should_send_heartbeat(state: State, now: datetime) -> bool:
-    """Check if we should send heartbeat now.
+def _reset_daily_stats_if_needed(state: State, today_str: str) -> None:
+    """Reset daily tracking when the date changes (Budapest TZ)."""
+    if state.daily_max_date != today_str:
+        state.daily_max_value = 0
+        state.daily_max_time = None
+        state.daily_max_date = today_str
+        state.daily_alert_times = []
 
-    Conditions:
-    - HEARTBEAT_ENABLED is True
-    - Current Budapest time is within the heartbeat window (HEARTBEAT_HOUR:00 - HEARTBEAT_HOUR:30)
-    - We haven't sent a heartbeat today yet
+
+def _update_daily_stats(state: State, current_value: int, budapest_now: datetime) -> None:
+    """Update daily max if current value is higher."""
+    if current_value > state.daily_max_value:
+        state.daily_max_value = current_value
+        state.daily_max_time = budapest_now.strftime("%H:%M")
+
+
+def _get_heartbeat_hour(state: State, budapest_now: datetime) -> int | None:
+    """Return the heartbeat hour to send, or None if not in any window.
+
+    Checks all configured HEARTBEAT_HOURS. Returns the hour if:
+    - We're in that hour's 30-min window (HH:00-HH:29)
+    - We haven't already sent a heartbeat for this hour today
     """
     if not config.HEARTBEAT_ENABLED:
-        return False
-
-    budapest_now = now.astimezone(BUDAPEST_TZ)
-    hour = config.HEARTBEAT_HOUR
-
-    if budapest_now.hour != hour or budapest_now.minute >= 30:
-        return False
+        return None
 
     today_str = budapest_now.strftime("%Y-%m-%d")
-    if state.last_heartbeat_date == today_str:
-        return False
 
-    return True
+    for hour in config.HEARTBEAT_HOURS:
+        if budapest_now.hour != hour or budapest_now.minute >= 30:
+            continue
+        # Check if already sent for this hour today
+        hour_key = str(hour)
+        if state.heartbeat_sent.get(hour_key) == today_str:
+            continue
+        return hour
+
+    return None
+
+
+def _is_summary_hour(hour: int) -> bool:
+    """The last configured heartbeat hour gets the daily summary format."""
+    return hour == config.HEARTBEAT_HOURS[-1]
 
 
 def run(state_path: str | None = None) -> int:
@@ -76,6 +103,11 @@ def run(state_path: str | None = None) -> int:
 
     state = load(state_path)
     now = datetime.now(timezone.utc)
+    budapest_now = now.astimezone(BUDAPEST_TZ)
+    today_str = budapest_now.strftime("%Y-%m-%d")
+
+    # Reset daily stats if date changed
+    _reset_daily_stats_if_needed(state, today_str)
 
     # Attempt to fetch current value
     try:
@@ -100,6 +132,9 @@ def run(state_path: str | None = None) -> int:
         save(state, state_path)
         return 0  # Not catastrophic – we'll retry next run
 
+    # Update daily stats
+    _update_daily_stats(state, current_value, budapest_now)
+
     # Decide and act
     action = decide_action(state, current_value, config.ALERT_THRESHOLD)
 
@@ -108,6 +143,7 @@ def run(state_path: str | None = None) -> int:
         send_alert(current_value, config.ALERT_THRESHOLD)
         state.alert_active = True
         state.alert_started_at = now
+        state.daily_alert_times.append(budapest_now.strftime("%H:%M"))
     elif action == "recovery":
         logger.info("RECOVERY: back to normal (%d <= %d)", current_value, config.ALERT_THRESHOLD)
         send_recovery(current_value, config.ALERT_THRESHOLD)
@@ -119,11 +155,22 @@ def run(state_path: str | None = None) -> int:
     state.last_checked = now
 
     # Heartbeat check (runs after normal monitoring)
-    if should_send_heartbeat(state, now):
-        last_checked_str = now.astimezone(BUDAPEST_TZ).strftime("%H:%M")
-        logger.info("Sending daily heartbeat")
-        send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str)
-        state.last_heartbeat_date = now.astimezone(BUDAPEST_TZ).strftime("%Y-%m-%d")
+    hb_hour = _get_heartbeat_hour(state, budapest_now)
+    if hb_hour is not None:
+        if _is_summary_hour(hb_hour):
+            logger.info("Sending daily summary (hour %d)", hb_hour)
+            send_daily_summary(
+                current_value=current_value,
+                threshold=config.ALERT_THRESHOLD,
+                daily_max=state.daily_max_value,
+                daily_max_time=state.daily_max_time,
+                alert_times=state.daily_alert_times,
+            )
+        else:
+            last_checked_str = budapest_now.strftime("%H:%M")
+            logger.info("Sending heartbeat (hour %d)", hb_hour)
+            send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str)
+        state.heartbeat_sent[str(hb_hour)] = today_str
 
     save(state, state_path)
 

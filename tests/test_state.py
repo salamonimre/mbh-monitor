@@ -18,7 +18,11 @@ class TestState:
         assert s.alert_started_at is None
         assert s.consecutive_fetch_failures == 0
         assert s.error_alert_sent is False
-        assert s.last_heartbeat_date is None
+        assert s.heartbeat_sent == {}
+        assert s.daily_max_value == 0
+        assert s.daily_max_time is None
+        assert s.daily_max_date is None
+        assert s.daily_alert_times == []
 
     def test_to_dict_and_back(self):
         now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=timezone.utc)

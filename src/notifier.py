@@ -89,6 +89,35 @@ def send_heartbeat(current_value: int, threshold: int, last_checked: str, **kwar
     return _send_telegram(message, **kwargs)
 
 
+def send_daily_summary(
+    current_value: int,
+    threshold: int,
+    daily_max: int,
+    daily_max_time: str | None,
+    alert_times: list[str],
+    **kwargs,
+) -> bool:
+    """Send end-of-day summary with daily max, alerts, and current state."""
+    alert_section = ""
+    if alert_times:
+        times_str = ", ".join(alert_times)
+        alert_section = f"Riasztás volt: igen ({times_str})\n"
+    else:
+        alert_section = "Riasztás volt: nem\n"
+
+    max_time_str = f" ({daily_max_time})" if daily_max_time else ""
+
+    message = (
+        f"<b>MBH Monitor – napi összefoglaló</b>\n\n"
+        f"Napi max: <b>{daily_max}</b>{max_time_str}\n"
+        f"Aktuális: <b>{current_value}</b>\n"
+        f"Küszöb: {threshold}\n"
+        f"{alert_section}\n"
+        f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
+    )
+    return _send_telegram(message, **kwargs)
+
+
 def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
     """Alert about consecutive fetch failures."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

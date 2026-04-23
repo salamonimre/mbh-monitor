@@ -19,7 +19,13 @@ class State:
     alert_started_at: datetime | None = None
     consecutive_fetch_failures: int = 0
     error_alert_sent: bool = False
-    last_heartbeat_date: str | None = None  # "YYYY-MM-DD"
+    # Heartbeat: maps "HH" -> "YYYY-MM-DD" for each hour already sent
+    heartbeat_sent: dict = field(default_factory=dict)
+    # Daily tracking (resets at midnight Budapest TZ)
+    daily_max_value: int = 0
+    daily_max_time: str | None = None  # "HH:MM"
+    daily_max_date: str | None = None  # "YYYY-MM-DD"
+    daily_alert_times: list = field(default_factory=list)  # ["HH:MM", ...]
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -34,6 +40,12 @@ class State:
             val = d.get(key)
             if isinstance(val, str):
                 d[key] = datetime.fromisoformat(val)
+        # Backward compat: migrate old last_heartbeat_date to heartbeat_sent
+        if "last_heartbeat_date" in d and "heartbeat_sent" not in d:
+            old_date = d.pop("last_heartbeat_date")
+            d["heartbeat_sent"] = {"9": old_date} if old_date else {}
+        elif "last_heartbeat_date" in d:
+            d.pop("last_heartbeat_date")
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
