@@ -71,15 +71,22 @@ A `main.py` minden indításnál ugyanazt csinálja: lekér, összehasonlít, é
 ### 2. Duplikáció-mentes riasztás
 Csak akkor küld riasztást, amikor **átlépi** a küszöböt (előző érték ≤ küszöb, új > küszöb). Helyreállás külön üzenet. Ezt a `state.json` biztosítja.
 
-### 3. Graceful failure
+### 3. Heartbeat & napi összefoglaló (catchup logika)
+A `HEARTBEAT_HOURS` env var-ban megadott óráknál (Budapest TZ) küld üzenetet:
+- **Korábbi órák** (pl. 9): egyszerű heartbeat (aktuális hibaszám, küszöb)
+- **Utolsó óra** (pl. 19): napi összefoglaló (napi max + mikor, aktuális, küszöb, volt-e alert)
+- **Napi max**: a Downdetector chart 96 adatpontjából (24h, 15 perces intervallumok) számítja, nem csak a 30 perces futások értékéből – így a futások közötti csúcsok sem vesznek el
+- **Catchup**: ha a GitHub Actions cron kihagyja a konfigurált órát, a következő futás pótlólag elküldi (feltétel: `current_hour >= configured_hour` és ma még nem küldtük). Deduplikáció: óránként max 1 üzenet naponta (`state.json` `heartbeat_sent` dict).
+
+### 4. Graceful failure
 Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik, értesít róla. Monitoring dashboard nélkül ez a legolcsóbb "van-e baj" jelzés.
 
-### 4. Scraping respectful
+### 5. Scraping respectful
 - User-Agent reális
 - 30 percnél gyakrabban SOHA nem kérdez le
 - Ha 429-et kapunk, exponenciális backoff
 
-### 5. Változásra érzékeny
+### 6. Változásra érzékeny
 A Downdetector HTML formátuma bármikor változhat. Az adatkinyerő kódnak legyen több stratégiája (elsődleges JSON parse → fallback regex → hiba), és a teszteknek valódi HTML fixture-ön kell futniuk.
 
 ## Kulcs parancsok
