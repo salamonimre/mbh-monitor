@@ -1,6 +1,6 @@
 {
   "last_value": 0,
-  "last_checked": "2026-04-24T21:13:38.548683+00:00",
+  "last_checked": "2026-04-24T22:08:21.328624+00:00",
   "alert_active": false,
   "alert_started_at": null,
   "consecutive_fetch_failures": 0,
@@ -11,8 +11,8 @@
     "19": "2026-04-24",
     "15": "2026-04-24"
   },
-  "daily_max_value": 2,
-  "daily_max_time": "12:06",
-  "daily_max_date": "2026-04-24",
+  "daily_max_value": 0,
+  "daily_max_time": null,
+  "daily_max_date": "2026-04-25",
   "daily_alert_times": []
 }
