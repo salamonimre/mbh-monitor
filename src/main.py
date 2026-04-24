@@ -80,11 +80,14 @@ def _get_chart_max_today(
 
 
 def _get_heartbeat_hour(state: State, budapest_now: datetime) -> int | None:
-    """Return the heartbeat hour to send, or None if not in any window.
+    """Return the heartbeat hour to send, or None.
 
-    Checks all configured HEARTBEAT_HOURS. Returns the hour if:
-    - We're in that hour's 30-min window (HH:00-HH:29)
+    Checks all configured HEARTBEAT_HOURS. Returns the earliest hour if:
+    - The configured hour has already passed (current hour >= configured hour)
     - We haven't already sent a heartbeat for this hour today
+
+    This ensures heartbeats are sent even when GitHub Actions cron skips
+    the exact hour window due to scheduling delays.
     """
     if not config.HEARTBEAT_ENABLED:
         return None
@@ -92,7 +95,7 @@ def _get_heartbeat_hour(state: State, budapest_now: datetime) -> int | None:
     today_str = budapest_now.strftime("%Y-%m-%d")
 
     for hour in config.HEARTBEAT_HOURS:
-        if budapest_now.hour != hour:
+        if budapest_now.hour < hour:
             continue
         # Check if already sent for this hour today
         hour_key = str(hour)

@@ -146,8 +146,8 @@ class TestGetHeartbeatHour:
             assert _get_heartbeat_hour(state, budapest_now) == 9
 
     def test_evening_window(self):
-        """19:10 Budapest -> returns 19."""
-        state = State(heartbeat_sent={})
+        """19:10 Budapest, 9 already sent -> returns 19."""
+        state = State(heartbeat_sent={"9": "2026-07-15"})
         budapest_now = datetime(2026, 7, 15, 19, 10, tzinfo=BUDAPEST_TZ)
         with patch("src.main.config") as mock_config:
             mock_config.HEARTBEAT_ENABLED = True
@@ -172,18 +172,27 @@ class TestGetHeartbeatHour:
             mock_config.HEARTBEAT_HOURS = [9, 19]
             assert _get_heartbeat_hour(state, budapest_now) == 9
 
-    def test_outside_all_windows(self):
-        """14:00 Budapest -> None."""
+    def test_before_first_hour(self):
+        """8:00 Budapest -> None (before any configured hour)."""
         state = State(heartbeat_sent={})
-        budapest_now = datetime(2026, 7, 15, 14, 0, tzinfo=BUDAPEST_TZ)
+        budapest_now = datetime(2026, 7, 15, 8, 0, tzinfo=BUDAPEST_TZ)
         with patch("src.main.config") as mock_config:
             mock_config.HEARTBEAT_ENABLED = True
             mock_config.HEARTBEAT_HOURS = [9, 19]
             assert _get_heartbeat_hour(state, budapest_now) is None
 
-    def test_next_hour_outside_window(self):
-        """10:00 Budapest -> None (not a configured hour)."""
+    def test_catchup_after_missed_window(self):
+        """10:00 Budapest, 9 not yet sent -> returns 9 (catchup)."""
         state = State(heartbeat_sent={})
+        budapest_now = datetime(2026, 7, 15, 10, 0, tzinfo=BUDAPEST_TZ)
+        with patch("src.main.config") as mock_config:
+            mock_config.HEARTBEAT_ENABLED = True
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            assert _get_heartbeat_hour(state, budapest_now) == 9
+
+    def test_no_catchup_when_already_sent(self):
+        """10:00 Budapest, 9 already sent -> None (between windows)."""
+        state = State(heartbeat_sent={"9": "2026-07-15"})
         budapest_now = datetime(2026, 7, 15, 10, 0, tzinfo=BUDAPEST_TZ)
         with patch("src.main.config") as mock_config:
             mock_config.HEARTBEAT_ENABLED = True
@@ -439,7 +448,8 @@ class TestHeartbeatIntegration:
         mock_fetch.return_value = _make_points(3)
         state_path = tmp_path / "state.json"
         save(State(daily_max_value=42, daily_max_time="14:30",
-                   daily_max_date="2026-07-15", daily_alert_times=["14:20"]),
+                   daily_max_date="2026-07-15", daily_alert_times=["14:20"],
+                   heartbeat_sent={"9": "2026-07-15"}),
              state_path)
         fake_now = datetime(2026, 7, 15, 17, 10, 0, tzinfo=timezone.utc)  # 19:10 Budapest
 
@@ -465,9 +475,10 @@ class TestHeartbeatIntegration:
     @patch("src.main.send_heartbeat")
     @patch("src.main.send_daily_summary")
     @patch("src.main.fetch_report_data")
-    def test_no_heartbeat_outside_windows(self, mock_fetch, mock_summary, mock_hb, tmp_path):
+    def test_no_heartbeat_when_all_sent(self, mock_fetch, mock_summary, mock_hb, tmp_path):
         mock_fetch.return_value = _make_points(3)
         state_path = tmp_path / "state.json"
+        save(State(heartbeat_sent={"9": "2026-07-15"}), state_path)
         fake_now = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)  # 14:00 Budapest
 
         with patch("src.main.config") as mock_config, \
