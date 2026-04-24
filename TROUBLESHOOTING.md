@@ -126,6 +126,23 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 
 **Teendő**: Nézd meg a GitHub Actions logot, azonosítsd melyik lépés bukik (FlareSolverr, curl_cffi, vagy parser).
 
+### "Forbidden: bot is not a member of the group"
+
+**Tünet**: A Telegram API `403 Forbidden` hibát ad `bot is not a member of the group` szöveggel.
+
+**Ok**: A bot eltávolították a Telegram csoportból, vagy a csoport ID megváltozott (pl. csoport → supergroupra konvertálás után).
+
+**Teendő**:
+1. Ellenőrizd, hogy a bot tagja-e a csoportnak (Telegram → csoport → Members)
+2. Ha eltávolították, add vissza a botot a csoportba
+3. Ha a csoport supergroupra konvertálódott, az ID megváltozott — futtasd a `getUpdates`-t, keresd meg az új chat ID-t, és frissítsd a GitHub Secrets-ben:
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | python3 -m json.tool
+   gh secret set TELEGRAM_CHAT_ID --body "<ÚJ_CHAT_ID>"
+   ```
+
+**Megjegyzés**: A `TELEGRAM_CHAT_ID` egy Telegram csoport ID (negatív szám, tipikusan `-100`-zal kezdődik), nem egyéni chat ID. Ha bármikor tokent rotálsz (biztonsági okból új tokent generálsz @BotFather-nél), a `TELEGRAM_BOT_TOKEN` secretet is frissíteni kell.
+
 ### "Csak 0 értéket kapok mindig"
 
 **Tünet**: A log `RSC strategy` sikert jelez, de az érték mindig 0.

@@ -113,7 +113,7 @@ gh workflow run monitor.yml
 | Név | Kötelező | Leírás |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | igen | @BotFather által adott token |
-| `TELEGRAM_CHAT_ID` | igen | A saját chat ID-d (@userinfobot ad meg) |
+| `TELEGRAM_CHAT_ID` | igen | Telegram csoport ID (negatív szám, `-100...` prefixszel) vagy egyéni chat ID |
 | `ALERT_THRESHOLD` | nem | Küszöbérték, default 10 |
 | `DOWNDETECTOR_URL` | nem | Default: MBH Bank URL |
 | `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
