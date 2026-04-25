@@ -194,8 +194,12 @@ def run(state_path: str | None = None) -> int:
             )
         else:
             last_checked_str = budapest_now.strftime("%H:%M")
+            last_point_ts = points[-1].timestamp
+            if last_point_ts.tzinfo is None:
+                last_point_ts = last_point_ts.replace(tzinfo=timezone.utc)
+            data_time = last_point_ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
             logger.info("Sending heartbeat (hour %d)", hb_hour)
-            send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str)
+            send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str, data_time=data_time)
         state.heartbeat_sent[str(hb_hour)] = today_str
 
     save(state, state_path)

@@ -78,11 +78,14 @@ def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
     return _send_telegram(message, **kwargs)
 
 
-def send_heartbeat(current_value: int, threshold: int, last_checked: str, **kwargs) -> bool:
+def send_heartbeat(current_value: int, threshold: int, last_checked: str, *, data_time: str | None = None, **kwargs) -> bool:
     """Send daily heartbeat status message."""
+    value_str = f"<b>{current_value}</b>"
+    if data_time:
+        value_str += f" ({data_time}-es adat)"
     message = (
         f"<b>MBH Monitor heartbeat</b>\n\n"
-        f"Aktuális reports: <b>{current_value}</b>\n"
+        f"Aktuális reports: {value_str}\n"
         f"Küszöb: {threshold}\n"
         f"Utolsó ellenőrzés: {last_checked}"
     )
