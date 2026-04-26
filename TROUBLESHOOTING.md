@@ -272,14 +272,31 @@ A Downdetector Next.js alkalmazás, és a RSC formátum változhat deploy-onkén
 
 ### GitHub Actions cron pontossága
 
-A GitHub cron ±5-10 perces késéssel fut. Ez a heartbeat ablaknál fontos:
-- A heartbeat ablak 30 perces (9:00-9:30 Budapest), ami lefedi ezt a pontatlanságot
-- Ha a cron-t sűríted, az ablakot is szűkítheted
+A GitHub cron ±5-10 perces késéssel fut, és néha 1-2 órát is kihagyhat. Ezért **külső cron trigger** is van (cron-job.org), offset-elve:
+- cron-job.org: `:00` és `:30` (elsődleges, megbízható)
+- GitHub Actions cron: `:15` és `:45` (backup)
+- Eredmény: ~15 percenként van legalább egy futás, ütközés nélkül
+
+### cron-job.org trigger leállása
+
+**Tünet**: A GitHub Actions-ben csak `:15`/`:45`-ös futások vannak, `:00`/`:30` hiányzik.
+
+**Lehetséges okok**:
+- A GitHub fine-grained PAT lejárt (**2026-07-25**) → cron-job.org 401-et kap
+- cron-job.org túl sok hibát észlelt és letiltotta a job-ot
+- cron-job.org szolgáltatás leállás
+
+**Teendő**:
+1. Ellenőrizd a cron-job.org dashboardon a job HISTORY-ját – 200-at (siker) vagy 401/403-at kap-e?
+2. Ha 401: a PAT lejárt → GitHub Settings → Fine-grained tokens → `mbh-monitor-cron-trigger` → regeneráld, és frissítsd a cron-job.org Authorization headerben
+3. Ha a job disabled: engedélyezd újra a cron-job.org dashboardon
+4. A GitHub Actions belső cron ez alatt is fut backup-ként, szóval a monitor nem áll le teljesen
 
 ### GitHub Actions inaktivitás
 
 60 napig inaktív repók cron-ja automatikusan kikapcsol.
 - Megoldás: alkalmanként commitolj (a state.json auto-commit ezt megoldja)
+- A cron-job.org trigger ezen felül is életben tartja a repót (workflow_dispatch futások)
 
 ---
 

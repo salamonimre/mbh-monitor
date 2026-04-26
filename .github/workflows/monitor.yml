@@ -2,7 +2,7 @@ name: MBH Monitor
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '15,45 * * * *'  # Offset: cron-job.org runs at :00/:30
   workflow_dispatch:
 
 permissions:

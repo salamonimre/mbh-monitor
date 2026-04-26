@@ -5,7 +5,7 @@ Ez a projekt 30 percenként lekérdezi az [MBH Bank Downdetector oldalt](https:/
 ## Gyors áttekintés
 
 - **Adatforrás**: downdetector.hu/problema/mbh-bank/ (scraping, mert nincs nyilvános API)
-- **Futtatókörnyezet**: GitHub Actions cron (ingyenes)
+- **Futtatókörnyezet**: GitHub Actions cron + cron-job.org külső trigger (ingyenes, redundáns)
 - **Nyelv**: Python 3.11+
 - **Értesítés**: Telegram bot
 - **Állapottárolás**: JSON fájl a repóban (commit-back pattern)
@@ -78,15 +78,23 @@ A `HEARTBEAT_HOURS` env var-ban megadott óráknál (Budapest TZ) küld üzenete
 - **Napi max**: a Downdetector chart 96 adatpontjából (24h, 15 perces intervallumok) számítja, nem csak a 30 perces futások értékéből – így a futások közötti csúcsok sem vesznek el
 - **Catchup**: ha a GitHub Actions cron kihagyja a konfigurált órát, a következő futás pótlólag elküldi (feltétel: `current_hour >= configured_hour` és ma még nem küldtük). Deduplikáció: óránként max 1 üzenet naponta (`state.json` `heartbeat_sent` dict).
 
-### 4. Graceful failure
+### 4. Redundáns ütemezés (belső + külső cron)
+A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás kimaradás). Ezért **két triggerrel** dolgozunk:
+- **cron-job.org** (elsődleges): `:00` és `:30`-kor (`*/30`), workflow_dispatch API híváson keresztül
+- **GitHub Actions cron** (backup): `:15` és `:45`-kor (`15,45`), offset-elve az ütközés elkerüléséhez
+- **Concurrency group** (`monitor`, `cancel-in-progress: false`): ha mégis átfedés lenne, a második futás sorba áll
+- A script idempotens, a heartbeat deduplikált (`state.json`) → dupla futás nem okoz dupla értesítést
+- A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2026-07-25** — lejárat előtt rotálni kell.
+
+### 5. Graceful failure
 Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik, értesít róla. Monitoring dashboard nélkül ez a legolcsóbb "van-e baj" jelzés.
 
-### 5. Scraping respectful
+### 6. Scraping respectful
 - User-Agent reális
 - 30 percnél gyakrabban SOHA nem kérdez le
 - Ha 429-et kapunk, exponenciális backoff
 
-### 6. Változásra érzékeny
+### 7. Változásra érzékeny
 A Downdetector HTML formátuma bármikor változhat. Az adatkinyerő kódnak legyen több stratégiája (elsődleges JSON parse → fallback regex → hiba), és a teszteknek valódi HTML fixture-ön kell futniuk.
 
 ## Kulcs parancsok
