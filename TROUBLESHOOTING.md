@@ -7,7 +7,7 @@ Ez a dokumentum leírja a scraper architektúráját, a tipikus hibákat, és ho
 ## 1. Architektúra áttekintés
 
 ```
-GitHub Actions cron (*/30 * * * *)
+Triggerek: cron-job.org (:00/:30) + GitHub Actions cron (:15/:45)
     │
     ▼
 ┌─────────────────────────────────────┐
@@ -17,36 +17,40 @@ GitHub Actions cron (*/30 * * * *)
 │  Feladat: Cloudflare challenge      │
 │  megoldása headless Chromium-mal    │
 │  Eredmény: cf_clearance cookie +   │
-│  User-Agent string                  │
+│  User-Agent string (Chrome verzió)  │
 └──────────────┬──────────────────────┘
                │ cookies + UA
                ▼
 ┌─────────────────────────────────────┐
 │  curl_cffi (Chrome TLS fingerprint) │
-│  impersonate="chrome"               │
+│  impersonate=CURL_CFFI_IMPERSONATE               │
 │  Feladat: raw SSR HTML letöltése    │
 │  a FlareSolverr cookie-kkal         │
 │  Miért: Cloudflare a cookie-t a     │
 │  TLS fingerprinthez köti, ezért     │
 │  nem elég a sima requests lib       │
 │  Eredmény: ~282 KB raw HTML         │
+│  403 → részletes log (cf-ray, body) │
 └──────────────┬──────────────────────┘
                │ raw HTML
                ▼
 ┌─────────────────────────────────────┐
-│  RSC Parser                         │
-│  Keresés: self.__next_f.push()      │
-│  payloadokban "dataPoints" tömb     │
-│  json.JSONDecoder.raw_decode()      │
-│  Eredmény: 96 adatpont             │
-│  (15 percenkénti bontás, 24 óra)   │
-│  Fallback: aria-label → heading     │
+│  Parse stratégia lánc               │
+│  1. RSC: __next_f.push() → 96 pont │
+│  2. JSON anywhere: bármilyen JSON   │
+│     tömb timestampUtc/reportsValue  │
+│  3. aria-label: 24h csúcs           │
+│  4. heading: "no current problems"  │
+│  5. ParseError → debug HTML mentés  │
+│  Nem-RSC → degradáció Telegram alert│
 └──────────────┬──────────────────────┘
-               │ current_value (utolsó adatpont)
+               │ ParseResult (points + strategy)
                ▼
 ┌─────────────────────────────────────┐
 │  Állapotgép (main.py)              │
 │  decide_action() + heartbeat        │
+│  degradáció-érzékelés               │
+│  PAT lejárat figyelmeztetés         │
 │  state.json: commit-back pattern    │
 │  Telegram értesítések               │
 └─────────────────────────────────────┘
@@ -58,7 +62,7 @@ A Downdetector Cloudflare mögött fut. Normál HTTP kérések (requests, curl) 
 
 ### Miért kell curl_cffi?
 
-Cloudflare a `cf_clearance` cookie-t a böngésző TLS fingerprintjéhez (JA3/JA4) köti. Ha a cookie-t egy eltérő TLS fingerprintű kliensből használjuk (pl. Python `requests`), 403-at kapunk. A `curl_cffi` a Chrome TLS fingerprintjét utánozza (`impersonate="chrome"`), így a cookie érvényes marad.
+Cloudflare a `cf_clearance` cookie-t a böngésző TLS fingerprintjéhez (JA3/JA4) köti. Ha a cookie-t egy eltérő TLS fingerprintű kliensből használjuk (pl. Python `requests`), 403-at kapunk. A `curl_cffi` a Chrome TLS fingerprintjét utánozza (konfigurálható: `CURL_CFFI_IMPERSONATE` env var, default `chrome136`), így a cookie érvényes marad.
 
 ### Miért nem elég a FlareSolverr válasz HTML-je?
 
@@ -75,39 +79,47 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 | Komponens | Fájl | Feladat |
 |---|---|---|
 | Config | `src/config.py` | Env var-ok beolvasása, default értékek |
-| Scraper | `src/scraper.py` | FlareSolverr hívás, curl_cffi fetch, RSC/aria-label/heading parse |
+| Scraper | `src/scraper.py` | FlareSolverr hívás, curl_cffi fetch, parse stratégia lánc (RSC → JSON anywhere → aria-label → heading) |
 | State | `src/state.py` | JSON state load/save, dataclass serialize |
-| Notifier | `src/notifier.py` | Telegram üzenetek (alert, recovery, heartbeat, error) |
-| Main | `src/main.py` | Orchestrator: fetch → decide → notify → heartbeat → save |
+| Notifier | `src/notifier.py` | Telegram üzenetek (alert, recovery, heartbeat, daily summary, parse degradáció, fetch error) |
+| Main | `src/main.py` | Orchestrator: fetch → parse → degradáció check → decide → notify → heartbeat/summary → save |
 | Workflow | `.github/workflows/monitor.yml` | Cron, FlareSolverr service, secrets, state commit-back |
 
 ---
 
 ## 3. Tipikus hibák és tüneteik
 
-### "Parsed via aria-label fallback" (WARNING a logban)
+### "Parse degradáció" alert Telegramon (vagy fallback WARNING a logban)
 
-**Tünet**: A log `aria-label fallback`-et jelez `RSC strategy` helyett.
+**Tünet**: Telegram degradáció alert, vagy a log `json_anywhere`/`aria-label` fallback-et jelez `RSC strategy` helyett.
 
-**Ok**: A raw HTML nem tartalmazza az RSC `__next_f.push` adatokat, vagy a parser regex nem találja.
+**Ok**: A raw HTML nem tartalmazza az RSC `__next_f.push` adatokat, vagy a parser regex nem találja. A rendszer automatikusan fallback stratégiára vált és Telegram értesítést küld.
 
 **Teendő**:
-1. Ellenőrizd a letöltött HTML méretét – ha ~6 KB, Cloudflare blokkolt (nem raw HTML, hanem challenge page)
-2. Ha ~280 KB de nincs RSC: a Downdetector változtatta a formátumot. Mentsd el az aktuális HTML-t, elemezd a `reportsValue` környezetét
+1. Töltsd le a debug HTML-t a GitHub Actions artifactokból (`debug-html-<run_id>`)
+2. Ellenőrizd a HTML méretét – ha ~6 KB, Cloudflare blokkolt (nem raw HTML, hanem challenge page)
+3. Ha ~280 KB de nincs RSC: a Downdetector változtatta a formátumot. Keresd a `reportsValue` környezetét az új HTML-ben
+4. Ha `json_anywhere` stratégia működik, az adatok még pontosak – van időd javítani az RSC parsert
+5. Ha `aria_label` fallback: csak 24h csúcsérték, nem pontos – sürgős javítás kell
+
+**Megjegyzés**: A `degraded_parse_alert_sent` state flag megakadályozza a spam-et. Ha az RSC parser újra működik, a flag automatikusan resetelődik.
 
 ### "HTTP 403 despite cookies"
 
-**Tünet**: FlareSolverr sikeresen ad cookie-kat, de a curl_cffi fetch 403-at kap.
+**Tünet**: FlareSolverr sikeresen ad cookie-kat, de a curl_cffi fetch 403-at kap. A log részletes diagnosztikát tartalmaz: `cf-ray`, `body snippet`, `impersonate` érték, és Cloudflare error code (pl. 1020).
 
 **Ok**:
 - A cookie lejárt (FlareSolverr lassú volt, és a cookie érvényessége rövid)
 - TLS fingerprint mismatch (curl_cffi verzió nem egyezik a FlareSolverr Chrome verziójával)
 - Cloudflare frissített és az aktuális impersonation profil elavult
+- Cloudflare 1020 error: access denied, valószínűleg TLS mismatch
 
 **Teendő**:
-1. Frissítsd a curl_cffi-t: `pip install --upgrade curl_cffi`
-2. Frissítsd a FlareSolverr image-et: `ghcr.io/flaresolverr/flaresolverr:latest`
-3. Ellenőrizd a FlareSolverr logot – ha "Challenge detected!" áll benne, a FlareSolverr sem tudja megoldani
+1. Nézd a logban a Chrome verziót (`Got N cookies from FlareSolverr (Chrome 136)`) — ha a FlareSolverr Chrome verziója és a `CURL_CFFI_IMPERSONATE` értéke nagyon eltér, az a baj
+2. Próbáld módosítani a `CURL_CFFI_IMPERSONATE` env var-t (pl. `chrome131`, `chrome136`)
+3. Frissítsd a curl_cffi-t: `pip install --upgrade curl_cffi`
+4. Frissítsd a FlareSolverr image-et: `ghcr.io/flaresolverr/flaresolverr:latest`
+5. Ellenőrizd a FlareSolverr logot – ha "Challenge detected!" áll benne, a FlareSolverr sem tudja megoldani
 
 ### "FlareSolverr timeout" / ConnectionError
 
@@ -173,7 +185,7 @@ gh run view <RUN_ID> --repo salamonimre/mbh-monitor --log | grep -E "(INFO|WARNI
 ```bash
 cat state.json
 # Tartalmaz: last_value, last_checked, alert_active, consecutive_fetch_failures,
-#            error_alert_sent, last_heartbeat_date
+#            error_alert_sent, heartbeat_sent, daily_max_*, degraded_parse_alert_sent
 ```
 
 ### Manuális workflow trigger
@@ -211,9 +223,10 @@ from src.scraper import fetch_html, parse_reports
 html = fetch_html("https://downdetector.hu/problema/mbh-bank/")
 print(f"HTML méret: {len(html)} byte")
 
-points = parse_reports(html)
-print(f"Adatpontok: {len(points)}")
-print(f"Utolsó érték: {points[-1].value} at {points[-1].timestamp}")
+result = parse_reports(html)
+print(f"Stratégia: {result.strategy}")  # "rsc" ha minden OK
+print(f"Adatpontok: {len(result.points)}")
+print(f"Utolsó érték: {result.points[-1].value} at {result.points[-1].timestamp}")
 ```
 
 ### 3. Teljes futás
@@ -260,14 +273,19 @@ Cloudflare rendszeresen frissíti a bot-detection logikáját. Amikor ez törté
 ### TLS fingerprint eltérés
 
 Ha a curl_cffi és a FlareSolverr más Chrome verziót utánoz, Cloudflare eldobja a cookie-t. Ez a curl_cffi frissítésekor fordulhat elő.
-- Tünet: 403 a curl_cffi fetch-nél, pedig FlareSolverr sikeresen ad cookie-t
-- Megoldás: curl_cffi `impersonate` paraméterét fixáld egy verzióra (pl. `"chrome120"`)
+- Tünet: 403 a curl_cffi fetch-nél, pedig FlareSolverr sikeresen ad cookie-t. A log mutatja a Chrome verziót és az impersonate értéket.
+- Megoldás: `CURL_CFFI_IMPERSONATE` GitHub Actions változót állítsd a FlareSolverr Chrome verziójához közelire (pl. `chrome131`, `chrome136`). Nem kell kód módosítás.
 
 ### Downdetector frontend változások
 
 A Downdetector Next.js alkalmazás, és a RSC formátum változhat deploy-onként.
-- Tünet: parser nem talál `reportsValue`-t, aria-label fallback-re esik
-- Megoldás: mentsd a nyers HTML-t, keresd meg az új formátumot, frissítsd a parsert
+- Tünet: Telegram degradáció alert + parse fallback a logban
+- A rendszer automatikusan:
+  1. Megpróbálja a `json_anywhere` stratégiát (ha az adatstruktúra változatlan)
+  2. Debug HTML-t ment és feltölti GitHub Actions artifactként
+  3. Telegram értesítést küld a degradációról
+- Teendőd: töltsd le a debug HTML-t, keresd meg az új formátumot, frissítsd a parsert
+- Ha `json_anywhere` működik: az adatok pontosak, van időd javítani
 - Várható gyakoriság: 2-6 havonta
 
 ### GitHub Actions cron pontossága
@@ -318,7 +336,12 @@ A GitHub cron ±5-10 perces késéssel fut, és néha 1-2 órát is kihagyhat. E
      "alert_started_at": null,
      "consecutive_fetch_failures": 0,
      "error_alert_sent": false,
-     "last_heartbeat_date": null
+     "heartbeat_sent": {},
+     "daily_max_value": 0,
+     "daily_max_time": null,
+     "daily_max_date": null,
+     "daily_alert_times": [],
+     "degraded_parse_alert_sent": false
    }
    ```
 6. **Lokális teszt**: Kövesd az 5. pont lépéseit feljebb
