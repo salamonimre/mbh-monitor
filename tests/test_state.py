@@ -23,6 +23,7 @@ class TestState:
         assert s.daily_max_time is None
         assert s.daily_max_date is None
         assert s.daily_alert_times == []
+        assert s.degraded_parse_alert_sent is False
 
     def test_to_dict_and_back(self):
         now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=timezone.utc)

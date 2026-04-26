@@ -26,6 +26,7 @@ class State:
     daily_max_time: str | None = None  # "HH:MM"
     daily_max_date: str | None = None  # "YYYY-MM-DD"
     daily_alert_times: list = field(default_factory=list)  # ["HH:MM", ...]
+    degraded_parse_alert_sent: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)

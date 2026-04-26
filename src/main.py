@@ -13,9 +13,12 @@ from src.notifier import (
     send_daily_summary,
     send_fetch_failure_alert,
     send_heartbeat,
+    send_parse_degradation_alert,
     send_recovery,
 )
-from src.scraper import ParseError, ReportPoint, fetch_report_data
+from pathlib import Path
+
+from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, fetch_html, parse_reports
 from src.state import State, load, save
 
 logging.basicConfig(
@@ -25,6 +28,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
+
+
+DEBUG_HTML_PATH = Path("/tmp/debug_response.html")
+
+
+def _save_debug_html(html: str) -> None:
+    """Save raw HTML for debugging when parse strategies fail."""
+    try:
+        DEBUG_HTML_PATH.write_text(html, encoding="utf-8")
+        logger.info("Debug HTML saved to %s (%d bytes)", DEBUG_HTML_PATH, len(html))
+    except Exception:
+        logger.warning("Could not save debug HTML")
 
 
 def decide_action(state: State, current_value: int, threshold: int) -> str:
@@ -106,6 +121,22 @@ def _get_heartbeat_hour(state: State, budapest_now: datetime) -> int | None:
     return None
 
 
+def _get_pat_expiry_warning() -> str | None:
+    """Return warning text if PAT expires within configured days, else None."""
+    if not config.PAT_EXPIRY_DATE:
+        return None
+    try:
+        expiry = datetime.strptime(config.PAT_EXPIRY_DATE, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    days_left = (expiry - datetime.now(timezone.utc).date()).days
+    if days_left <= 0:
+        return f"LEJÁRT a cron-job.org PAT ({config.PAT_EXPIRY_DATE})! Azonnal rotáld."
+    if days_left <= config.PAT_EXPIRY_WARNING_DAYS:
+        return f"cron-job.org PAT {days_left} nap múlva lejár ({config.PAT_EXPIRY_DATE})"
+    return None
+
+
 def _is_summary_hour(hour: int) -> bool:
     """The last configured heartbeat hour gets the daily summary format."""
     return hour == config.HEARTBEAT_HOURS[-1]
@@ -130,14 +161,20 @@ def run(state_path: str | None = None) -> int:
     # Reset daily stats if date changed
     _reset_daily_stats_if_needed(state, today_str)
 
-    # Attempt to fetch report data
+    # Attempt to fetch and parse report data (split for debug HTML on parse failure)
+    html: str | None = None
     try:
-        points = fetch_report_data()
+        html = fetch_html(config.DOWNDETECTOR_URL)
+        result = parse_reports(html)
+        points = result.points
         current_value = points[-1].value
         state.consecutive_fetch_failures = 0
         state.error_alert_sent = False
-        logger.info("Current report count: %d (threshold: %d)", current_value, config.ALERT_THRESHOLD)
-    except (ParseError, Exception) as exc:
+        logger.info("Current report count: %d (threshold: %d, strategy: %s)",
+                     current_value, config.ALERT_THRESHOLD, result.strategy)
+    except (FetchError, ParseError, Exception) as exc:
+        if isinstance(exc, ParseError) and html:
+            _save_debug_html(html)
         state.consecutive_fetch_failures += 1
         logger.error(
             "Fetch failed (%d consecutive): %s",
@@ -153,6 +190,15 @@ def run(state_path: str | None = None) -> int:
         state.last_checked = now
         save(state, state_path)
         return 0  # Not catastrophic – we'll retry next run
+
+    # Degradation detection: alert if RSC strategy failed
+    if result.strategy == "rsc":
+        state.degraded_parse_alert_sent = False
+    elif not state.degraded_parse_alert_sent:
+        logger.warning("Parse degradation: using %s instead of rsc", result.strategy)
+        _save_debug_html(html)
+        send_parse_degradation_alert(result.strategy, current_value)
+        state.degraded_parse_alert_sent = True
 
     # Update daily stats from chart data (covers spikes between runs)
     chart_max, chart_max_time = _get_chart_max_today(points, budapest_now)
@@ -185,12 +231,17 @@ def run(state_path: str | None = None) -> int:
     if hb_hour is not None:
         if _is_summary_hour(hb_hour):
             logger.info("Sending daily summary (hour %d)", hb_hour)
+            warnings = []
+            pat_warning = _get_pat_expiry_warning()
+            if pat_warning:
+                warnings.append(pat_warning)
             send_daily_summary(
                 current_value=current_value,
                 threshold=config.ALERT_THRESHOLD,
                 daily_max=state.daily_max_value,
                 daily_max_time=state.daily_max_time,
                 alert_times=state.daily_alert_times,
+                warnings=warnings,
             )
         else:
             last_checked_str = budapest_now.strftime("%H:%M")

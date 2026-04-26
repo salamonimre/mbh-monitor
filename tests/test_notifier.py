@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_heartbeat, send_daily_summary, _send_telegram
+from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_heartbeat, send_daily_summary, send_parse_degradation_alert, _send_telegram
 
 
 class TestSendTelegram:
@@ -99,3 +99,20 @@ class TestAlertMessages:
         msg = mock_send.call_args[0][0]
         assert "nem" in msg.lower()
         assert "7" in msg
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_daily_summary_with_warnings(self, mock_send):
+        result = send_daily_summary(3, 10, daily_max=7, daily_max_time="11:00",
+                                     alert_times=[], warnings=["PAT 5 nap múlva lejár"])
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "PAT" in msg
+        assert "⚠️" in msg
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_parse_degradation_alert(self, mock_send):
+        result = send_parse_degradation_alert("json_anywhere", 7)
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "json_anywhere" in msg
+        assert "degradáció" in msg.lower() or "Parse" in msg

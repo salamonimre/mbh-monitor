@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.scraper import FetchError, ParseError, ReportPoint, parse_reports, fetch_html, get_current_value
+from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, parse_reports, fetch_html, get_current_value
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -14,26 +14,30 @@ class TestParseReports:
     def test_parse_rsc_data_points(self):
         """RSC strategy extracts precise per-interval values."""
         html = (FIXTURES / "normal_response.html").read_text()
-        reports = parse_reports(html)
-        assert len(reports) == 5
-        assert all(isinstance(r, ReportPoint) for r in reports)
+        result = parse_reports(html)
+        assert isinstance(result, ParseResult)
+        assert result.strategy == "rsc"
+        assert len(result.points) == 5
+        assert all(isinstance(r, ReportPoint) for r in result.points)
         # Should be sorted by timestamp
-        timestamps = [r.timestamp for r in reports]
+        timestamps = [r.timestamp for r in result.points]
         assert timestamps == sorted(timestamps)
         # Last value should be 2 (from fixture)
-        assert reports[-1].value == 2
+        assert result.points[-1].value == 2
 
     def test_parse_high_alert_rsc(self):
         html = (FIXTURES / "high_alert_response.html").read_text()
-        reports = parse_reports(html)
-        assert len(reports) == 5
-        assert reports[-1].value == 152
+        result = parse_reports(html)
+        assert result.strategy == "rsc"
+        assert len(result.points) == 5
+        assert result.points[-1].value == 152
 
     def test_parse_no_problems_heading_only(self):
         html = (FIXTURES / "no_problems_heading_only.html").read_text()
-        reports = parse_reports(html)
-        assert len(reports) == 1
-        assert reports[0].value == 0
+        result = parse_reports(html)
+        assert result.strategy == "heading"
+        assert len(result.points) == 1
+        assert result.points[0].value == 0
 
     def test_parse_empty_response_raises_parse_error(self):
         html = (FIXTURES / "empty_response.html").read_text()
@@ -52,9 +56,10 @@ class TestParseReports:
     def test_rsc_strategy_takes_priority_over_aria_label(self):
         """RSC data should be preferred over aria-label (24h peak)."""
         html = (FIXTURES / "normal_response.html").read_text()
-        reports = parse_reports(html)
+        result = parse_reports(html)
+        assert result.strategy == "rsc"
         # RSC says last value is 2, aria-label says peak is 5
-        assert reports[-1].value == 2
+        assert result.points[-1].value == 2
 
     def test_aria_label_fallback_when_no_rsc(self):
         """Falls back to aria-label when RSC data missing."""
@@ -63,9 +68,23 @@ class TestParseReports:
         <div aria-label="Reports chart for the last 24 hours with a peak of 42 reports, status: ok"></div>
         </body></html>
         """
-        reports = parse_reports(html)
-        assert len(reports) == 1
-        assert reports[0].value == 42
+        result = parse_reports(html)
+        assert result.strategy == "aria_label"
+        assert len(result.points) == 1
+        assert result.points[0].value == 42
+
+    def test_json_anywhere_fallback(self):
+        """JSON anywhere strategy finds data outside RSC push payloads."""
+        html = """
+        <html><body><script>
+        var data = [{"timestampUtc": "2026-04-26T10:00:00+00:00", "reportsValue": 7},
+                     {"timestampUtc": "2026-04-26T10:15:00+00:00", "reportsValue": 3}];
+        </script></body></html>
+        """
+        result = parse_reports(html)
+        assert result.strategy == "json_anywhere"
+        assert len(result.points) == 2
+        assert result.points[-1].value == 3
 
 
 class TestFetchHtml:

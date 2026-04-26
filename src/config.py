@@ -29,6 +29,11 @@ RETRY_BACKOFF_BASE: float = 2.0
 
 CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3
 
+CURL_CFFI_IMPERSONATE: str = os.environ.get("CURL_CFFI_IMPERSONATE", "chrome136")
+
+PAT_EXPIRY_DATE: str = os.environ.get("PAT_EXPIRY_DATE", "2026-07-25")
+PAT_EXPIRY_WARNING_DAYS: int = 30
+
 HEARTBEAT_ENABLED: bool = os.environ.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
 HEARTBEAT_HOURS: list[int] = [int(h.strip()) for h in os.environ.get("HEARTBEAT_HOURS", "9,19").split(",")]
 

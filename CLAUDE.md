@@ -94,8 +94,18 @@ Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, 
 - 30 percnél gyakrabban SOHA nem kérdez le
 - Ha 429-et kapunk, exponenciális backoff
 
-### 7. Változásra érzékeny
-A Downdetector HTML formátuma bármikor változhat. Az adatkinyerő kódnak legyen több stratégiája (elsődleges JSON parse → fallback regex → hiba), és a teszteknek valódi HTML fixture-ön kell futniuk.
+### 7. Változásra érzékeny (parse stratégia lánc + degradáció-érzékelés)
+A Downdetector HTML formátuma bármikor változhat. A `parse_reports()` stratégia lánca:
+1. **RSC** (`rsc`): Next.js `__next_f.push()` payloadokból `dataPoints` tömb — legpontosabb, 96 adatpont
+2. **JSON anywhere** (`json_anywhere`): bármilyen JSON tömb a HTML-ben ami `timestampUtc`/`reportsValue` mezőket tartalmaz — ha az RSC delivery megváltozik de az adatstruktúra nem
+3. **aria-label** (`aria_label`): chart aria-label attribútumból 24h csúcs — közelítő érték
+4. **heading** (`heading`): "no current problems" felirat → 0 reports
+5. **ParseError**: ha semmi sem talál
+
+Ha az RSC stratégia nem működik és fallback-re kerül a sor, a rendszer:
+- Telegram értesítést küld (`send_parse_degradation_alert`) a használt stratégiáról
+- Debug HTML-t ment (`/tmp/debug_response.html`) és feltölti GitHub Actions artifactként
+- A `degraded_parse_alert_sent` state flag megakadályozza a spam-et (RSC visszaállásakor resetelődik)
 
 ## Kulcs parancsok
 
@@ -126,6 +136,8 @@ gh workflow run monitor.yml
 | `DOWNDETECTOR_URL` | nem | Default: MBH Bank URL |
 | `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
 | `HEARTBEAT_HOURS` | nem | Heartbeat órák vesszővel (Budapest TZ), default `9,19`. Az utolsó óra napi összefoglalót küld. |
+| `PAT_EXPIRY_DATE` | nem | cron-job.org PAT lejárati dátum (`YYYY-MM-DD`), default `2026-07-25`. 30 napon belül figyelmeztet a napi összefoglalóban. |
+| `CURL_CFFI_IMPERSONATE` | nem | curl_cffi TLS fingerprint, default `chrome136`. Változtasd ha Cloudflare blokkolja. |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
 

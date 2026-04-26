@@ -98,6 +98,7 @@ def send_daily_summary(
     daily_max: int,
     daily_max_time: str | None,
     alert_times: list[str],
+    warnings: list[str] | None = None,
     **kwargs,
 ) -> bool:
     """Send end-of-day summary with daily max, alerts, and current state."""
@@ -110,13 +111,33 @@ def send_daily_summary(
 
     max_time_str = f" ({daily_max_time})" if daily_max_time else ""
 
+    warning_section = ""
+    if warnings:
+        warning_section = "\n" + "\n".join(f"⚠️ {w}" for w in warnings) + "\n"
+
     message = (
         f"<b>MBH Monitor – napi összefoglaló</b>\n\n"
         f"Napi max: <b>{daily_max}</b>{max_time_str}\n"
         f"Aktuális: <b>{current_value}</b>\n"
         f"Küszöb: {threshold}\n"
-        f"{alert_section}\n"
+        f"{alert_section}"
+        f"{warning_section}\n"
         f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
+    )
+    return _send_telegram(message, **kwargs)
+
+
+def send_parse_degradation_alert(strategy: str, current_value: int, **kwargs) -> bool:
+    """Alert when RSC parse strategy fails and a fallback is used."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    message = (
+        f"⚠️ <b>MBH Monitor – Parse degradáció</b>\n\n"
+        f"Az elsődleges RSC adatkinyerés nem működik.\n"
+        f"Fallback stratégia: <code>{strategy}</code>\n"
+        f"Aktuális reports: <b>{current_value}</b>\n"
+        f"Időpont: {now}\n\n"
+        f"A Downdetector HTML formátuma valószínűleg megváltozott. "
+        f"Ellenőrizd a debug HTML-t a GitHub Actions artifactok között."
     )
     return _send_telegram(message, **kwargs)
 

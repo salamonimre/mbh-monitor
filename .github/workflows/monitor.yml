@@ -50,7 +50,17 @@ jobs:
           DOWNDETECTOR_URL: ${{ vars.DOWNDETECTOR_URL || 'https://downdetector.hu/problema/mbh-bank/' }}
           HEARTBEAT_ENABLED: ${{ vars.HEARTBEAT_ENABLED || 'true' }}
           HEARTBEAT_HOURS: ${{ vars.HEARTBEAT_HOURS || '9,19' }}
+          PAT_EXPIRY_DATE: ${{ vars.PAT_EXPIRY_DATE || '2026-07-25' }}
         run: python -m src.main
+
+      - name: Upload debug HTML if parse failed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-html-${{ github.run_id }}
+          path: /tmp/debug_response.html
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Commit state changes
         if: always()

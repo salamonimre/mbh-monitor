@@ -31,6 +31,19 @@ class ReportPoint:
     value: int
 
 
+@dataclass
+class ParseResult:
+    """Result of parsing report data, including which strategy succeeded."""
+    points: list[ReportPoint]
+    strategy: str  # "rsc", "json_anywhere", "aria_label", "heading"
+
+
+def _extract_chrome_version(user_agent: str) -> int | None:
+    """Extract major Chrome version from User-Agent string."""
+    match = re.search(r'Chrome/(\d+)', user_agent)
+    return int(match.group(1)) if match else None
+
+
 def _get_cf_cookies(url: str, timeout: int) -> dict[str, str]:
     """Use FlareSolverr to solve Cloudflare and return bypass cookies."""
     flaresolverr_url = config.FLARESOLVERR_URL
@@ -52,7 +65,10 @@ def _get_cf_cookies(url: str, timeout: int) -> dict[str, str]:
         cookies[cookie["name"]] = cookie["value"]
 
     user_agent = data["solution"].get("userAgent", "")
-    logger.info("Got %d cookies from FlareSolverr", len(cookies))
+    chrome_ver = _extract_chrome_version(user_agent)
+    ver_info = f" (Chrome {chrome_ver})" if chrome_ver else ""
+    logger.info("Got %d cookies from FlareSolverr%s, impersonate=%s",
+                len(cookies), ver_info, config.CURL_CFFI_IMPERSONATE)
     return cookies, user_agent
 
 
@@ -76,11 +92,20 @@ def fetch_html(url: str, *, timeout: int | None = None) -> str:
             headers = {"User-Agent": user_agent} if user_agent else {}
             resp = cf_requests.get(
                 url, cookies=cookies, headers=headers,
-                timeout=timeout, impersonate="chrome",
+                timeout=timeout, impersonate=config.CURL_CFFI_IMPERSONATE,
             )
 
             if resp.status_code == 403:
-                raise FetchError("HTTP 403 despite cookies – Cloudflare may need re-solving")
+                body_snippet = (resp.text or "")[:500]
+                cf_ray = resp.headers.get("cf-ray", "unknown")
+                detail = (
+                    f"HTTP 403 | cf-ray={cf_ray} | "
+                    f"impersonate={config.CURL_CFFI_IMPERSONATE} | "
+                    f"body={body_snippet}"
+                )
+                if "1020" in body_snippet:
+                    raise FetchError(f"Cloudflare 1020 (access denied, likely TLS mismatch): {detail}")
+                raise FetchError(f"HTTP 403 despite cookies: {detail}")
             resp.raise_for_status()
 
             html = resp.text
@@ -153,6 +178,45 @@ def _parse_rsc_strategy(html: str) -> list[ReportPoint]:
     return []
 
 
+def _parse_json_anywhere_strategy(html: str) -> list[ReportPoint]:
+    """Fallback: find any JSON array containing timestampUtc/reportsValue anywhere in HTML.
+
+    This handles cases where Downdetector changes the RSC delivery mechanism
+    but keeps the same data structure.
+    """
+    decoder = json.JSONDecoder()
+    # Search for array-like patterns that might contain report data
+    for match in re.finditer(r'\[(?=\s*\{)', html):
+        try:
+            arr, _ = decoder.raw_decode(html, match.start())
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        if not isinstance(arr, list) or len(arr) < 2:
+            continue
+
+        # Check if this looks like report data
+        sample = arr[0]
+        if not isinstance(sample, dict):
+            continue
+        if "timestampUtc" not in sample or "reportsValue" not in sample:
+            continue
+
+        points = []
+        for dp in arr:
+            try:
+                ts = datetime.fromisoformat(dp["timestampUtc"])
+                value = int(dp["reportsValue"])
+                points.append(ReportPoint(timestamp=ts, value=value))
+            except (KeyError, ValueError, TypeError):
+                continue
+
+        if points:
+            return sorted(points, key=lambda p: p.timestamp)
+
+    return []
+
+
 def _parse_aria_label_strategy(html: str) -> list[ReportPoint]:
     """Fallback: extract peak from chart aria-label."""
     match = re.search(
@@ -173,10 +237,10 @@ def _parse_heading_strategy(html: str) -> list[ReportPoint]:
     return []
 
 
-def parse_reports(html: str) -> list[ReportPoint]:
-    """Parse HTML using strategy chain: RSC dataPoints -> aria-label -> heading -> error.
+def parse_reports(html: str) -> ParseResult:
+    """Parse HTML using strategy chain: RSC -> JSON anywhere -> aria-label -> heading -> error.
 
-    Returns list of ReportPoint sorted by timestamp.
+    Returns ParseResult with points and strategy name.
     Raises ParseError if no strategy succeeds.
     """
     # Strategy 1: RSC dataPoints (precise, per-interval values)
@@ -186,26 +250,35 @@ def parse_reports(html: str) -> list[ReportPoint]:
             "Parsed %d data points via RSC strategy (latest: %d at %s)",
             len(points), points[-1].value, points[-1].timestamp.isoformat(),
         )
-        return points
+        return ParseResult(points=points, strategy="rsc")
 
-    # Strategy 2: aria-label peak (approximate, 24h peak)
+    # Strategy 2: JSON anywhere (RSC delivery changed but data structure intact)
+    points = _parse_json_anywhere_strategy(html)
+    if points:
+        logger.warning(
+            "Parsed %d data points via json_anywhere fallback (latest: %d at %s)",
+            len(points), points[-1].value, points[-1].timestamp.isoformat(),
+        )
+        return ParseResult(points=points, strategy="json_anywhere")
+
+    # Strategy 3: aria-label peak (approximate, 24h peak)
     points = _parse_aria_label_strategy(html)
     if points:
         logger.warning("Parsed via aria-label fallback (24h peak): %d", points[-1].value)
-        return points
+        return ParseResult(points=points, strategy="aria_label")
 
-    # Strategy 3: heading status
+    # Strategy 4: heading status
     points = _parse_heading_strategy(html)
     if points:
         logger.info("Parsed via heading strategy: no current problems")
-        return points
+        return ParseResult(points=points, strategy="heading")
 
-    # Strategy 4: fail
+    # Strategy 5: fail
     raise ParseError("No parse strategy could extract report data from HTML")
 
 
-def fetch_report_data(url: str | None = None) -> list[ReportPoint]:
-    """Fetch and return all chart data points. Main entry point."""
+def fetch_report_data(url: str | None = None) -> ParseResult:
+    """Fetch and return parsed chart data. Main entry point."""
     url = url or config.DOWNDETECTOR_URL
     html = fetch_html(url)
     return parse_reports(html)
@@ -213,4 +286,4 @@ def fetch_report_data(url: str | None = None) -> list[ReportPoint]:
 
 def get_current_value(url: str | None = None) -> int:
     """Fetch and return the current report count (last data point)."""
-    return fetch_report_data(url)[-1].value
+    return fetch_report_data(url).points[-1].value
