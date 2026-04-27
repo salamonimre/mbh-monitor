@@ -67,7 +67,14 @@ jobs:
         run: |
           git config user.name  "mbh-monitor-bot"
           git config user.email "mbh-monitor-bot@users.noreply.github.com"
+          cp state.json /tmp/state_backup.json
           git add state.json
           git diff --staged --quiet || git commit -m "chore: update state [skip ci]"
-          git pull --rebase || true
-          git push
+          git pull --rebase || {
+            git rebase --abort
+            git pull || true
+            cp /tmp/state_backup.json state.json
+            git add state.json
+            git diff --staged --quiet || git commit -m "chore: update state [skip ci]"
+          }
+          git push || true
