@@ -155,6 +155,28 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 
 **Megjegyzés**: A `TELEGRAM_CHAT_ID` egy Telegram csoport ID (negatív szám, tipikusan `-100`-zal kezdődik), nem egyéni chat ID. Ha bármikor tokent rotálsz (biztonsági okból új tokent generálsz @BotFather-nél), a `TELEGRAM_BOT_TOKEN` secretet is frissíteni kell.
 
+### "state.json push failed" (vagy `::warning::Failed to push state.json`)
+
+**Tünet**: A GitHub Actions logban `Push failed, remote has diverged. Recovering...` üzenetek, vagy `::warning::Failed to push state.json after 3 attempts`.
+
+**Ok**: Két párhuzamos futás (pl. cron-job.org `:00` és GitHub cron `:15` átfedése) egyszerre próbálja commitolni a state.json-t. A concurrency group megakadályozza a párhuzamos futást, de edge case-ekben (pl. az első futás commit lépése közben indul a második) előfordulhat.
+
+**Hogyan kezeli a rendszer**:
+1. A workflow `set +e`-vel fut, minden hibát kézzel kezel
+2. Ha a push elutasítva: `git fetch origin main` → `git reset --hard origin/main` → backup restore → újra commit → push
+3. Max 3 kísérlet, utána `::warning` annotation (nem buktatja el a workflow-t)
+4. A kihagyott state update a következő futáskor frissül (a script idempotens)
+
+**Teendő**: Semmi, hacsak nem látod hogy tartósan (5+ egymás utáni futásnál) nem commitol. Ebben az esetben:
+```bash
+# Kézi state reset
+gh api repos/salamonimre/mbh-monitor/contents/state.json \
+  --method PUT \
+  --field message="chore: manual state reset" \
+  --field content="$(base64 state.json)" \
+  --field sha="$(gh api repos/salamonimre/mbh-monitor/contents/state.json --jq .sha)"
+```
+
 ### "Csak 0 értéket kapok mindig"
 
 **Tünet**: A log `RSC strategy` sikert jelez, de az érték mindig 0.
