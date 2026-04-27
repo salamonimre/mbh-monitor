@@ -65,16 +65,43 @@ jobs:
       - name: Commit state changes
         if: always()
         run: |
+          set +e  # We handle errors manually in this step
           git config user.name  "mbh-monitor-bot"
           git config user.email "mbh-monitor-bot@users.noreply.github.com"
+
+          # Save our state before any git operations
           cp state.json /tmp/state_backup.json
+
+          # Initial commit of local changes
           git add state.json
-          git diff --staged --quiet || git commit -m "chore: update state [skip ci]"
-          git pull --rebase || {
-            git rebase --abort
-            git pull || true
+          git diff --staged --quiet && { echo "No state changes to commit"; exit 0; }
+          git commit -m "chore: update state [skip ci]"
+
+          # Retry loop: fetch remote, rebase, push
+          MAX_ATTEMPTS=3
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "=== Push attempt $attempt/$MAX_ATTEMPTS ==="
+
+            if git push; then
+              echo "Push succeeded on attempt $attempt"
+              exit 0
+            fi
+
+            echo "Push failed, remote has diverged. Recovering..."
+
+            # Clean up any stuck rebase state
+            git rebase --abort 2>/dev/null || true
+
+            # Fetch latest remote state
+            git fetch origin main
+
+            # Reset to remote, then re-apply our state on top
+            git reset --hard origin/main
             cp /tmp/state_backup.json state.json
             git add state.json
-            git diff --staged --quiet || git commit -m "chore: update state [skip ci]"
-          }
-          git push || true
+            git diff --staged --quiet && { echo "State unchanged after reset, nothing to push"; exit 0; }
+            git commit -m "chore: update state [skip ci]"
+          done
+
+          echo "::warning::Failed to push state.json after $MAX_ATTEMPTS attempts"
+          exit 0  # Don't fail the workflow, state will be retried next run
