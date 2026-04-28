@@ -51,7 +51,7 @@ def decide_action(state: State, current_value: int, threshold: int) -> str:
         "none"     – no state change requiring notification
     """
     was_above = state.alert_active
-    is_above = current_value > threshold
+    is_above = current_value >= threshold
 
     if is_above and not was_above:
         return "alert"
@@ -72,6 +72,7 @@ def _reset_daily_stats_if_needed(state: State, today_str: str) -> None:
 def _update_daily_stats(state: State, max_value: int, max_time: str | None) -> None:
     """Update daily max if the given value is higher."""
     if max_value > state.daily_max_value:
+        logger.info("Daily max updated: %d -> %d (at %s)", state.daily_max_value, max_value, max_time)
         state.daily_max_value = max_value
         state.daily_max_time = max_time
 
@@ -158,6 +159,10 @@ def run(state_path: str | None = None) -> int:
     budapest_now = now.astimezone(BUDAPEST_TZ)
     today_str = budapest_now.strftime("%Y-%m-%d")
 
+    logger.info("Run started | threshold=%d | hb_hours=%s | state: value=%d failures=%d alert=%s",
+                config.ALERT_THRESHOLD, config.HEARTBEAT_HOURS,
+                state.last_value, state.consecutive_fetch_failures, state.alert_active)
+
     # Reset daily stats if date changed
     _reset_daily_stats_if_needed(state, today_str)
 
@@ -185,9 +190,12 @@ def run(state_path: str | None = None) -> int:
             state.consecutive_fetch_failures >= config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD
             and not state.error_alert_sent
         ):
-            send_fetch_failure_alert(state.consecutive_fetch_failures, str(exc))
+            ok = send_fetch_failure_alert(state.consecutive_fetch_failures, str(exc))
+            logger.info("Fetch failure alert -> ok=%s", ok)
             state.error_alert_sent = True
         state.last_checked = now
+        logger.info("Run complete (error) | failures=%d | error_alert_sent=%s",
+                     state.consecutive_fetch_failures, state.error_alert_sent)
         save(state, state_path)
         return 0  # Not catastrophic – we'll retry next run
 
@@ -197,11 +205,14 @@ def run(state_path: str | None = None) -> int:
     elif not state.degraded_parse_alert_sent:
         logger.warning("Parse degradation: using %s instead of rsc", result.strategy)
         _save_debug_html(html)
-        send_parse_degradation_alert(result.strategy, current_value)
+        ok = send_parse_degradation_alert(result.strategy, current_value)
+        logger.info("Parse degradation alert -> ok=%s", ok)
         state.degraded_parse_alert_sent = True
 
     # Update daily stats from chart data (covers spikes between runs)
     chart_max, chart_max_time = _get_chart_max_today(points, budapest_now)
+    logger.info("Chart max today: %d at %s (previous daily_max: %d)",
+                chart_max, chart_max_time or "n/a", state.daily_max_value)
     if current_value > chart_max:
         chart_max = current_value
         chart_max_time = budapest_now.strftime("%H:%M")
@@ -212,15 +223,20 @@ def run(state_path: str | None = None) -> int:
 
     if action == "alert":
         logger.info("ALERT: threshold crossed (%d > %d)", current_value, config.ALERT_THRESHOLD)
-        send_alert(current_value, config.ALERT_THRESHOLD)
+        ok = send_alert(current_value, config.ALERT_THRESHOLD)
+        logger.info("Alert notification -> ok=%s", ok)
         state.alert_active = True
         state.alert_started_at = now
         state.daily_alert_times.append(budapest_now.strftime("%H:%M"))
     elif action == "recovery":
         logger.info("RECOVERY: back to normal (%d <= %d)", current_value, config.ALERT_THRESHOLD)
-        send_recovery(current_value, config.ALERT_THRESHOLD)
+        ok = send_recovery(current_value, config.ALERT_THRESHOLD)
+        logger.info("Recovery notification -> ok=%s", ok)
         state.alert_active = False
         state.alert_started_at = None
+    else:
+        logger.info("No action needed (value=%d, threshold=%d, alert_active=%s)",
+                     current_value, config.ALERT_THRESHOLD, state.alert_active)
 
     # Update state
     state.last_value = current_value
@@ -235,7 +251,7 @@ def run(state_path: str | None = None) -> int:
             pat_warning = _get_pat_expiry_warning()
             if pat_warning:
                 warnings.append(pat_warning)
-            send_daily_summary(
+            ok = send_daily_summary(
                 current_value=current_value,
                 threshold=config.ALERT_THRESHOLD,
                 daily_max=state.daily_max_value,
@@ -243,6 +259,7 @@ def run(state_path: str | None = None) -> int:
                 alert_times=state.daily_alert_times,
                 warnings=warnings,
             )
+            logger.info("Daily summary notification -> ok=%s", ok)
         else:
             last_checked_str = budapest_now.strftime("%H:%M")
             last_point_ts = points[-1].timestamp
@@ -250,9 +267,14 @@ def run(state_path: str | None = None) -> int:
                 last_point_ts = last_point_ts.replace(tzinfo=timezone.utc)
             data_time = last_point_ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
             logger.info("Sending heartbeat (hour %d)", hb_hour)
-            send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str, data_time=data_time)
+            ok = send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str, data_time=data_time, strategy=result.strategy)
+            logger.info("Heartbeat notification -> ok=%s", ok)
+        logger.info("Heartbeat sent for hour %d (actual: %s) | type=%s",
+                     hb_hour, budapest_now.strftime("%H:%M"), "summary" if _is_summary_hour(hb_hour) else "heartbeat")
         state.heartbeat_sent[str(hb_hour)] = today_str
 
+    logger.info("Run complete | value=%d | daily_max=%d | action=%s | strategy=%s",
+                current_value, state.daily_max_value, action, result.strategy)
     save(state, state_path)
 
     return 0

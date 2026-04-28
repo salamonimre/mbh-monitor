@@ -81,8 +81,8 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 | Config | `src/config.py` | Env var-ok beolvasása, default értékek |
 | Scraper | `src/scraper.py` | FlareSolverr hívás, curl_cffi fetch, parse stratégia lánc (RSC → JSON anywhere → aria-label → heading) |
 | State | `src/state.py` | JSON state load/save, dataclass serialize |
-| Notifier | `src/notifier.py` | Telegram üzenetek (alert, recovery, heartbeat, daily summary, parse degradáció, fetch error) |
-| Main | `src/main.py` | Orchestrator: fetch → parse → degradáció check → decide → notify → heartbeat/summary → save |
+| Notifier | `src/notifier.py` | Telegram üzenetek (alert, recovery, heartbeat, daily summary, parse degradáció, fetch error). A `_send_telegram` `msg_type` paraméterrel logol típust. |
+| Main | `src/main.py` | Orchestrator: fetch → parse → degradáció check → decide → notify → heartbeat/summary → save. Strukturált logolás: minden futás teljes trace-t hagy (run started → action → run complete). |
 | Workflow | `.github/workflows/monitor.yml` | Cron, FlareSolverr service, secrets, state commit-back |
 
 ---
@@ -340,7 +340,83 @@ A GitHub cron ±5-10 perces késéssel fut, és néha 1-2 órát is kihagyhat. E
 
 ---
 
-## 8. Visszatérés fél év után – gyors útmutató
+## 8. Post-mortem elemzés a strukturált logokból
+
+A logolás úgy van kialakítva, hogy a GitHub Actions logból egy teljes napi riport visszaállítható legyen. Minden futás tartalmazza: state betöltés, chart adatok, döntés indoklása, Telegram küldés eredménye, futás lezárása.
+
+### Gyors parancsok
+
+```bash
+# Egy futás teljes logja (csak INFO sorok)
+gh run view <RUN_ID> --log | grep INFO
+
+# Mai összes futás lényege
+gh run list -L 50 --json databaseId,startedAt,conclusion \
+  | jq '.[] | select(.startedAt | startswith("2026-04-27"))'
+
+# Telegram küldések egy nap alatt
+gh run view <RUN_ID> --log | grep -E "(Telegram sent|-> ok=)"
+```
+
+### Példa log — normál futás
+
+```
+12:00:45 [INFO] src.state: State loaded | value=0 alert=False failures=0 hb_sent={'9': '2026-04-27'} daily_max=3
+12:00:45 [INFO] __main__: Run started | threshold=10 | hb_hours=[9, 19] | state: value=0 failures=0 alert=False
+12:00:50 [INFO] src.scraper: Got 24 cookies from FlareSolverr (Chrome 142), impersonate=chrome136
+12:00:51 [INFO] src.scraper: Fetched 279369 bytes of raw HTML
+12:00:51 [INFO] src.scraper: RSC strategy: found 39 __next_f.push payloads
+12:00:51 [INFO] src.scraper: Parsed 96 data points via RSC strategy (latest: 2 at 2026-04-27T11:45:00+00:00)
+12:00:51 [INFO] src.scraper: Recent points: 0@11:00, 1@11:15, 0@11:30, 2@11:45, 2@12:00
+12:00:51 [INFO] __main__: Current report count: 2 (threshold: 10, strategy: rsc)
+12:00:51 [INFO] __main__: Chart max today: 5 at 09:30 (previous daily_max: 3)
+12:00:51 [INFO] __main__: Daily max updated: 3 -> 5 (at 09:30)
+12:00:51 [INFO] __main__: No action needed (value=2, threshold=10, alert_active=False)
+12:00:51 [INFO] __main__: Run complete | value=2 | daily_max=5 | action=none | strategy=rsc
+12:00:51 [INFO] src.state: State saved to state.json
+```
+
+### Példa log — hiba futás
+
+```
+12:00:45 [INFO] src.state: State loaded | value=0 alert=False failures=2 hb_sent={} daily_max=0
+12:00:45 [INFO] __main__: Run started | threshold=10 | hb_hours=[9, 19] | state: value=0 failures=2 alert=False
+12:00:50 [ERROR] __main__: Fetch failed (3 consecutive): 500 Server Error
+12:00:50 [INFO] src.notifier: Telegram sent | type=fetch_failure
+12:00:50 [INFO] __main__: Fetch failure alert -> ok=True
+12:00:50 [INFO] __main__: Run complete (error) | failures=3 | error_alert_sent=True
+12:00:50 [INFO] src.state: State saved to state.json
+```
+
+### Példa log — alert + heartbeat
+
+```
+19:00:45 [INFO] __main__: Run started | threshold=10 | hb_hours=[9, 19] | state: value=5 failures=0 alert=False
+19:00:51 [INFO] __main__: Current report count: 15 (threshold: 10, strategy: rsc)
+19:00:51 [INFO] __main__: ALERT: threshold crossed (15 > 10)
+19:00:51 [INFO] src.notifier: Telegram sent | type=alert
+19:00:51 [INFO] __main__: Alert notification -> ok=True
+19:00:51 [INFO] __main__: Sending daily summary (hour 19)
+19:00:52 [INFO] src.notifier: Telegram sent | type=daily_summary
+19:00:52 [INFO] __main__: Daily summary notification -> ok=True
+19:00:52 [INFO] __main__: Heartbeat sent for hour 19 (actual: 19:00) | type=summary
+19:00:52 [INFO] __main__: Run complete | value=15 | daily_max=15 | action=alert | strategy=rsc
+```
+
+### Kulcs log mezők és Telegram msg_type értékek
+
+| msg_type | Mikor küldődik | Megjegyzés |
+|---|---|---|
+| `alert` | Küszöb átlépve (value > threshold, korábban nem volt aktív) | Állapot: alert_active → True |
+| `recovery` | Visszatérés küszöb alá (value ≤ threshold, korábban aktív volt) | Állapot: alert_active → False |
+| `heartbeat` | Konfigurált órában (nem az utolsó) | Aktuális érték + adat ideje |
+| `daily_summary` | Utolsó konfigurált heartbeat óra | Napi max, alert idők, PAT warning |
+| `parse_degradation` | RSC stratégia nem működik, fallback-re váltott | Egyszer küld, RSC visszaállásakor reset |
+| `fetch_failure` | 3+ egymás utáni sikertelen fetch | Egyszer küld, sikeres fetch-nél reset |
+
+---
+
+## 9. Visszatérés fél év után – gyors útmutató
 
 1. **Olvasd el ezt a fájlt** – most itt tartasz
 2. **Nézd meg a GitHub Actions**: Actions fül → van-e zöld pipa az utolsó futásoknál?

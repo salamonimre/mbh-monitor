@@ -17,6 +17,7 @@ TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 def _send_telegram(
     message: str,
     *,
+    msg_type: str = "unknown",
     token: str | None = None,
     chat_id: str | None = None,
     session: requests.Session | None = None,
@@ -38,7 +39,7 @@ def _send_telegram(
         try:
             resp = sess.post(url, json=payload, timeout=config.HTTP_TIMEOUT)
             if resp.status_code == 200:
-                logger.info("Telegram message sent successfully")
+                logger.info("Telegram sent | type=%s", msg_type)
                 return True
             logger.warning(
                 "Telegram API returned %d: %s (attempt %d)",
@@ -62,7 +63,7 @@ def send_alert(current_value: int, threshold: int, **kwargs) -> bool:
         f"Időpont: {now}\n\n"
         f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
     )
-    return _send_telegram(message, **kwargs)
+    return _send_telegram(message, msg_type="alert", **kwargs)
 
 
 def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
@@ -75,21 +76,34 @@ def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
         f"Időpont: {now}\n\n"
         f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
     )
-    return _send_telegram(message, **kwargs)
+    return _send_telegram(message, msg_type="recovery", **kwargs)
 
 
-def send_heartbeat(current_value: int, threshold: int, last_checked: str, *, data_time: str | None = None, **kwargs) -> bool:
+def send_heartbeat(
+    current_value: int,
+    threshold: int,
+    last_checked: str,
+    *,
+    data_time: str | None = None,
+    strategy: str | None = None,
+    **kwargs,
+) -> bool:
     """Send daily heartbeat status message."""
     value_str = f"<b>{current_value}</b>"
     if data_time:
         value_str += f" ({data_time}-es adat)"
+    if strategy and strategy != "rsc":
+        status_line = f"Lekérdezés: fallback parser (<code>{strategy}</code>)"
+    else:
+        status_line = "Lekérdezés: rendben"
     message = (
         f"<b>MBH Monitor heartbeat</b>\n\n"
         f"Aktuális reports: {value_str}\n"
         f"Küszöb: {threshold}\n"
+        f"{status_line}\n"
         f"Utolsó ellenőrzés: {last_checked}"
     )
-    return _send_telegram(message, **kwargs)
+    return _send_telegram(message, msg_type="heartbeat", **kwargs)
 
 
 def send_daily_summary(
@@ -124,7 +138,7 @@ def send_daily_summary(
         f"{warning_section}\n"
         f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
     )
-    return _send_telegram(message, **kwargs)
+    return _send_telegram(message, msg_type="daily_summary", **kwargs)
 
 
 def send_parse_degradation_alert(strategy: str, current_value: int, **kwargs) -> bool:
@@ -139,7 +153,7 @@ def send_parse_degradation_alert(strategy: str, current_value: int, **kwargs) ->
         f"A Downdetector HTML formátuma valószínűleg megváltozott. "
         f"Ellenőrizd a debug HTML-t a GitHub Actions artifactok között."
     )
-    return _send_telegram(message, **kwargs)
+    return _send_telegram(message, msg_type="parse_degradation", **kwargs)
 
 
 def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
@@ -152,4 +166,4 @@ def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
         f"Időpont: {now}\n\n"
         f"A monitor nem tud adatot lekérdezni. Ellenőrizd a logokat."
     )
-    return _send_telegram(message, **kwargs)
+    return _send_telegram(message, msg_type="fetch_failure", **kwargs)

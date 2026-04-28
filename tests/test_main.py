@@ -42,14 +42,15 @@ class TestDecideAction:
     @pytest.mark.parametrize(
         "prev_value,alert_active,curr,threshold,expected",
         [
-            (10, False, 20, 30, "none"),
-            (10, False, 35, 30, "alert"),
-            (35, True, 40, 30, "none"),
-            (40, True, 25, 30, "recovery"),
-            (0, False, 35, 30, "alert"),
-            (10, False, 30, 30, "none"),
-            (10, False, 31, 30, "alert"),
-            (35, True, 30, 30, "recovery"),
+            (10, False, 20, 30, "none"),       # below threshold, no change
+            (10, False, 35, 30, "alert"),      # crossed above
+            (35, True, 40, 30, "none"),        # already active, stays above
+            (40, True, 25, 30, "recovery"),    # dropped below
+            (0, False, 35, 30, "alert"),       # first run, above
+            (10, False, 30, 30, "alert"),      # exactly at threshold (>=) → alert
+            (10, False, 31, 30, "alert"),      # above threshold
+            (35, True, 30, 30, "none"),        # exactly at threshold, alert active → stays active
+            (35, True, 29, 30, "recovery"),    # dropped below threshold
         ],
     )
     def test_decide_action(self, prev_value, alert_active, curr, threshold, expected):

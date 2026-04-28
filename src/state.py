@@ -58,7 +58,11 @@ def load(path: str | Path) -> State:
         return State()
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        return State.from_dict(data)
+        state = State.from_dict(data)
+        logger.info("State loaded | value=%d alert=%s failures=%d hb_sent=%s daily_max=%d",
+                     state.last_value, state.alert_active, state.consecutive_fetch_failures,
+                     state.heartbeat_sent, state.daily_max_value)
+        return state
     except (json.JSONDecodeError, TypeError, KeyError) as exc:
         logger.warning("Corrupt state file %s (%s), using defaults", p, exc)
         return State()

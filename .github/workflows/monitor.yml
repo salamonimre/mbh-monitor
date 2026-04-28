@@ -74,7 +74,7 @@ jobs:
 
           # Initial commit of local changes
           git add state.json
-          git diff --staged --quiet && { echo "No state changes to commit"; exit 0; }
+          git diff --cached --quiet && { echo "No state changes to commit"; exit 0; }
           git commit -m "chore: update state [skip ci]"
 
           # Retry loop: fetch remote, rebase, push
@@ -99,7 +99,7 @@ jobs:
             git reset --hard origin/main
             cp /tmp/state_backup.json state.json
             git add state.json
-            git diff --staged --quiet && { echo "State unchanged after reset, nothing to push"; exit 0; }
+            git diff --cached --quiet && { echo "State unchanged after reset, nothing to push"; exit 0; }
             git commit -m "chore: update state [skip ci]"
           done
 

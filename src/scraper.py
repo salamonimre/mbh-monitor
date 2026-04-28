@@ -250,6 +250,8 @@ def parse_reports(html: str) -> ParseResult:
             "Parsed %d data points via RSC strategy (latest: %d at %s)",
             len(points), points[-1].value, points[-1].timestamp.isoformat(),
         )
+        logger.info("Recent points: %s",
+                     ", ".join("%d@%s" % (p.value, p.timestamp.strftime('%H:%M')) for p in points[-5:]))
         return ParseResult(points=points, strategy="rsc")
 
     # Strategy 2: JSON anywhere (RSC delivery changed but data structure intact)

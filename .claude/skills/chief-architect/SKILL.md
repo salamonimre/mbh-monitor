@@ -66,14 +66,19 @@ A Downdetector bármikor átalakíthatja a HTML-t. A parser legyen:
 - Valid-álja a konfigot induláskor (pl. token formátum)
 
 **`scraper.py`**
-- `fetch_reports(url) -> list[ReportPoint]`
-- Visszaad időrendezett `(timestamp, value)` tuple-öket
-- Beépített parse-stratégia lánc (JSON → regex → exception)
-- HTTP retry 429/5xx-re exponenciális backoff-fal
+- `fetch_html(url) -> str` — FlareSolverr + curl_cffi kétlépéses fetch
+- `parse_reports(html) -> ParseResult` — stratégia lánc (RSC → JSON anywhere → aria-label → heading → ParseError)
+- Visszaad időrendezett `ReportPoint` listát + stratégia nevet
+- HTTP retry exponenciális backoff-fal
 
 **`notifier.py`**
-- `send_alert(message: str) -> bool`
-- `send_recovery(message: str) -> bool`
+- `_send_telegram(message, *, msg_type="unknown", ...) -> bool` — alap küldő, `msg_type`-ot logol
+- `send_alert(current_value, threshold) -> bool` — msg_type="alert"
+- `send_recovery(current_value, threshold) -> bool` — msg_type="recovery"
+- `send_heartbeat(current_value, threshold, last_checked, *, data_time) -> bool` — msg_type="heartbeat"
+- `send_daily_summary(current_value, threshold, daily_max, ...) -> bool` — msg_type="daily_summary"
+- `send_parse_degradation_alert(strategy, current_value) -> bool` — msg_type="parse_degradation"
+- `send_fetch_failure_alert(failures, error) -> bool` — msg_type="fetch_failure"
 - Telegram API hívás, timeout, retry
 - Message formatting (emoji, timestamp, link az oldalra)
 
@@ -85,6 +90,8 @@ A Downdetector bármikor átalakíthatja a HTML-t. A parser legyen:
 **`main.py`**
 - Orchestrator, logika itt él
 - Nincs benne HTTP vagy fájl-primitívek – csak a moduloktól kér
+- Strukturált logolás: minden futás teljes trace-t hagy (run started → chart max → action → run complete)
+- Telegram küldés eredményét logol (`-> ok=True/False`)
 - Exit code: 0 ha minden OK (még ha volt is alert), 1 ha catastrofikus hiba
 
 ### Adatstruktúrák
@@ -97,12 +104,24 @@ class ReportPoint:
     value: int
 
 @dataclass
+class ParseResult:
+    points: list[ReportPoint]
+    strategy: str  # "rsc", "json_anywhere", "aria_label", "heading"
+
+@dataclass
 class State:
     last_value: int
-    last_checked: datetime
+    last_checked: datetime | None
     alert_active: bool              # épp "hiba állapotban" vagyunk-e
     alert_started_at: datetime | None
     consecutive_fetch_failures: int  # hány egymás utáni fetch bukott
+    error_alert_sent: bool          # küldtünk-e már fetch failure alertet
+    heartbeat_sent: dict            # {"9": "2026-04-27", "19": "2026-04-27"}
+    daily_max_value: int            # napi csúcs (chart 96 adatpontból)
+    daily_max_time: str | None      # "HH:MM"
+    daily_max_date: str | None      # "YYYY-MM-DD" (reset éjfélkor)
+    daily_alert_times: list         # ["HH:MM", ...] napi alert időpontok
+    degraded_parse_alert_sent: bool # RSC fallback alertet küldtünk-e
 ```
 
 ### Riasztási állapotgép

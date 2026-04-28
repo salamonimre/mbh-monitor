@@ -177,6 +177,7 @@ Ez egy GitHub Actions-es projekt, nincs külön deploy. Merge a `main`-re = depl
 ## Logging standard
 
 - A Python `logging` modult használjuk, nem `print`-et
+- `%`-os format stringek (NEM f-string) — lazy evaluation + exception safety
 - INFO szint: normál futás események
 - WARNING: felhasználó figyelmét érdemelné (pl. fallback parser használva)
 - ERROR: működés megáll vagy értesítést kellett küldeni
@@ -188,7 +189,33 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
+# Jó:
+logger.info("Run started | threshold=%d | value=%d", threshold, value)
+# Rossz:
+logger.info(f"Run started | threshold={threshold} | value={value}")
 ```
+
+### Strukturált log sorok (post-mortem rekonstrukcióhoz)
+
+Minden futás a következő kulcs log sorokat tartalmazza:
+
+| Log sor | Modul | Mikor |
+|---|---|---|
+| `State loaded \| value=... alert=... failures=... hb_sent=... daily_max=...` | state.py | State betöltésekor |
+| `Run started \| threshold=... hb_hours=... state: ...` | main.py | Futás indítása |
+| `Recent points: ...` | scraper.py | RSC parse után (utolsó 5 pont) |
+| `Chart max today: ... (previous daily_max: ...)` | main.py | Chart max kiszámítása után |
+| `Daily max updated: X -> Y (at HH:MM)` | main.py | Ha a napi csúcs nőtt |
+| `No action needed / ALERT / RECOVERY` | main.py | Döntés indoklása |
+| `Telegram sent \| type=...` | notifier.py | Sikeres Telegram küldés (`msg_type` értékek: alert, recovery, heartbeat, daily_summary, parse_degradation, fetch_failure) |
+| `... notification -> ok=...` | main.py | Küldés eredménye a hívó oldalon |
+| `Heartbeat sent for hour N (actual: HH:MM) \| type=...` | main.py | Heartbeat catchup tényleges ideje |
+| `Run complete \| value=... daily_max=... action=... strategy=...` | main.py | Sikeres futás lezárás |
+| `Run complete (error) \| failures=... error_alert_sent=...` | main.py | Hiba utáni lezárás |
+
+Post-mortem parancs: `gh run view <ID> --log | grep INFO`
+
+Részletes log példák és elemzési útmutató: [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md) – "Post-mortem elemzés" szekció.
 
 ## Karbantartási teendők (időszakos)
 
