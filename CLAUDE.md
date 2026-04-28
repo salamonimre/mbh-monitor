@@ -1,6 +1,6 @@
 # MBH Bank Downdetector Monitor
 
-Ez a projekt 30 percenként lekérdezi az [MBH Bank Downdetector oldalt](https://downdetector.hu/problema/mbh-bank/), és Telegram értesítést küld, ha a bejelentett hibák száma meghalad egy konfigurálható küszöböt (alapértelmezésben 10).
+Ez a projekt 30 percenként lekérdezi az [MBH Bank Downdetector oldalt](https://downdetector.hu/problema/mbh-bank/), és Telegram értesítést küld, ha a bejelentett hibák száma eléri vagy meghaladja a konfigurálható küszöböt (alapértelmezésben 10).
 
 ## Gyors áttekintés
 
@@ -69,7 +69,7 @@ A projekten egy kis "csapat" dolgozik, mindegyiknek megvan a saját felelősség
 A `main.py` minden indításnál ugyanazt csinálja: lekér, összehasonlít, értesít ha kell, állapotot frissít. Nincs rejtett állapot a memóriában.
 
 ### 2. Duplikáció-mentes riasztás
-Csak akkor küld riasztást, amikor **átlépi** a küszöböt (előző érték ≤ küszöb, új > küszöb). Helyreállás külön üzenet. Ezt a `state.json` biztosítja.
+Csak akkor küld riasztást, amikor **eléri vagy átlépi** a küszöböt (előző érték < küszöb, új >= küszöb). Helyreállás: amikor visszaesik a küszöb alá (új < küszöb). Ezt a `state.json` biztosítja.
 
 ### 3. Heartbeat & napi összefoglaló (catchup logika)
 A `HEARTBEAT_HOURS` env var-ban megadott óráknál (Budapest TZ) küld üzenetet:

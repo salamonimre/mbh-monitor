@@ -407,8 +407,8 @@ gh run view <RUN_ID> --log | grep -E "(Telegram sent|-> ok=)"
 
 | msg_type | Mikor küldődik | Megjegyzés |
 |---|---|---|
-| `alert` | Küszöb átlépve (value > threshold, korábban nem volt aktív) | Állapot: alert_active → True |
-| `recovery` | Visszatérés küszöb alá (value ≤ threshold, korábban aktív volt) | Állapot: alert_active → False |
+| `alert` | Küszöb elérve (value >= threshold, korábban nem volt aktív) | Állapot: alert_active → True |
+| `recovery` | Visszatérés küszöb alá (value < threshold, korábban aktív volt) | Állapot: alert_active → False |
 | `heartbeat` | Konfigurált órában (nem az utolsó) | Aktuális érték + adat ideje |
 | `daily_summary` | Utolsó konfigurált heartbeat óra | Napi max, alert idők, PAT warning |
 | `parse_degradation` | RSC stratégia nem működik, fallback-re váltott | Egyszer küld, RSC visszaállásakor reset |

@@ -127,10 +127,10 @@ class State:
 ### Riasztási állapotgép
 
 ```
-NORMÁL ─(value > threshold)──▶ RIASZTÁS_AKTÍV
-  ▲                                   │
-  │                                   │
-  └────(value ≤ threshold)────────────┘
+NORMÁL ─(value >= threshold)──▶ RIASZTÁS_AKTÍV
+  ▲                                    │
+  │                                    │
+  └────(value < threshold)─────────────┘
         + helyreállás üzenet
 ```
 
