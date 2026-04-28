@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import requests
+
+BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 
 from src import config
 
@@ -56,7 +59,7 @@ def _send_telegram(
 
 def send_alert(current_value: int, threshold: int, **kwargs) -> bool:
     """Send threshold-crossed alert."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
     message = (
         f"🚨 <b>MBH Bank – Downdetector riasztás</b>\n\n"
         f"Bejelentett hibák száma: <b>{current_value}</b> (küszöb: {threshold})\n"
@@ -68,7 +71,7 @@ def send_alert(current_value: int, threshold: int, **kwargs) -> bool:
 
 def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
     """Send recovery notification."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
     message = (
         f"✅ <b>MBH Bank – Helyreállás</b>\n\n"
         f"Bejelentett hibák száma: <b>{current_value}</b> (küszöb: {threshold})\n"
@@ -143,7 +146,7 @@ def send_daily_summary(
 
 def send_parse_degradation_alert(strategy: str, current_value: int, **kwargs) -> bool:
     """Alert when RSC parse strategy fails and a fallback is used."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
     message = (
         f"⚠️ <b>MBH Monitor – Parse degradáció</b>\n\n"
         f"Az elsődleges RSC adatkinyerés nem működik.\n"
@@ -158,7 +161,7 @@ def send_parse_degradation_alert(strategy: str, current_value: int, **kwargs) ->
 
 def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
     """Alert about consecutive fetch failures."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
     message = (
         f"⚠️ <b>MBH Monitor – Scraping hiba</b>\n\n"
         f"Egymás utáni sikertelen lekérdezések: <b>{failures}</b>\n"
