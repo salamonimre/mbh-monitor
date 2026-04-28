@@ -1,6 +1,6 @@
 {
   "last_value": 0,
-  "last_checked": "2026-04-28T21:30:47.911252+00:00",
+  "last_checked": "2026-04-28T22:01:39.253609+00:00",
   "alert_active": false,
   "alert_started_at": null,
   "consecutive_fetch_failures": 0,
@@ -11,11 +11,9 @@
     "19": "2026-04-28",
     "15": "2026-04-24"
   },
-  "daily_max_value": 3,
-  "daily_max_time": "10:07",
-  "daily_max_date": "2026-04-28",
-  "daily_alert_times": [
-    "10:30"
-  ],
+  "daily_max_value": 0,
+  "daily_max_time": null,
+  "daily_max_date": "2026-04-29",
+  "daily_alert_times": [],
   "degraded_parse_alert_sent": false
 }
