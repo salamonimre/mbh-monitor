@@ -12,6 +12,7 @@ from src.notifier import (
     send_alert,
     send_daily_summary,
     send_fetch_failure_alert,
+    send_fetch_recovery,
     send_heartbeat,
     send_parse_degradation_alert,
     send_recovery,
@@ -173,10 +174,21 @@ def run(state_path: str | None = None) -> int:
         result = parse_reports(html)
         points = result.points
         current_value = points[-1].value
-        state.consecutive_fetch_failures = 0
-        state.error_alert_sent = False
         logger.info("Current report count: %d (threshold: %d, strategy: %s)",
                      current_value, config.ALERT_THRESHOLD, result.strategy)
+
+        # Fetch recovery notification: if we had sent an error alert, notify that it's resolved
+        if state.error_alert_sent:
+            ok = send_fetch_recovery(
+                previous_failures=state.consecutive_fetch_failures,
+                current_value=current_value,
+                strategy=result.strategy,
+            )
+            logger.info("Fetch recovery notification -> ok=%s (after %d failures)",
+                         ok, state.consecutive_fetch_failures)
+
+        state.consecutive_fetch_failures = 0
+        state.error_alert_sent = False
     except (FetchError, ParseError, Exception) as exc:
         if isinstance(exc, ParseError) and html:
             _save_debug_html(html)

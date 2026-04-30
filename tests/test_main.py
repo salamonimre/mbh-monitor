@@ -409,10 +409,11 @@ class TestErrorAlerting:
 
         mock_fail_alert.assert_not_called()
 
+    @patch("src.main.send_fetch_recovery", return_value=True)
     @patch("src.main.send_fetch_failure_alert")
     @patch("src.main.parse_reports")
     @patch("src.main.fetch_html", return_value="<html>ok</html>")
-    def test_success_resets_failure_state(self, mock_html, mock_parse, mock_fail_alert, tmp_path):
+    def test_success_resets_failure_state(self, mock_html, mock_parse, mock_fail_alert, mock_recovery, tmp_path):
         mock_parse.return_value = _make_result(5)
         state_path = tmp_path / "state.json"
         save(State(consecutive_fetch_failures=4, error_alert_sent=True), state_path)
@@ -430,6 +431,28 @@ class TestErrorAlerting:
         loaded = load(state_path)
         assert loaded.consecutive_fetch_failures == 0
         assert loaded.error_alert_sent is False
+        mock_recovery.assert_called_once_with(previous_failures=4, current_value=5, strategy="rsc")
+
+    @patch("src.main.send_fetch_recovery", return_value=True)
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_no_recovery_when_no_prior_error_alert(self, mock_html, mock_parse, mock_recovery, tmp_path):
+        """If error_alert_sent was False, no recovery notification is sent."""
+        mock_parse.return_value = _make_result(5)
+        state_path = tmp_path / "state.json"
+        save(State(consecutive_fetch_failures=1, error_alert_sent=False), state_path)
+
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+
+            run(str(state_path))
+
+        mock_recovery.assert_not_called()
 
 
 class TestHeartbeatIntegration:

@@ -170,3 +170,23 @@ def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
         f"A monitor nem tud adatot lekérdezni. Ellenőrizd a logokat."
     )
     return _send_telegram(message, msg_type="fetch_failure", **kwargs)
+
+
+def send_fetch_recovery(
+    previous_failures: int,
+    current_value: int,
+    strategy: str,
+    **kwargs,
+) -> bool:
+    """Notify that fetching recovered after consecutive failures."""
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
+    message = (
+        f"✅ <b>MBH Monitor – Scraping helyreállt</b>\n\n"
+        f"A monitor újra sikeresen le tudja kérdezni az adatokat.\n"
+        f"Korábbi sikertelen lekérdezések: <b>{previous_failures}</b>\n"
+        f"Aktuális reports: <b>{current_value}</b>\n"
+        f"Stratégia: <code>{strategy}</code>\n"
+        f"Időpont: {now}\n\n"
+        f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
+    )
+    return _send_telegram(message, msg_type="fetch_recovery", **kwargs)
