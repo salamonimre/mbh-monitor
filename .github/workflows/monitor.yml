@@ -51,6 +51,7 @@ jobs:
           HEARTBEAT_ENABLED: ${{ vars.HEARTBEAT_ENABLED || 'true' }}
           HEARTBEAT_HOURS: ${{ vars.HEARTBEAT_HOURS || '9,19' }}
           PAT_EXPIRY_DATE: ${{ vars.PAT_EXPIRY_DATE || '2026-07-25' }}
+          CURL_CFFI_IMPERSONATE: ${{ vars.CURL_CFFI_IMPERSONATE || 'chrome136' }}
         run: python -m src.main
 
       - name: Upload debug HTML if parse failed
