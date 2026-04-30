@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src import scraper
 from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, parse_reports, fetch_html, get_current_value
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -91,7 +92,9 @@ class TestFetchHtml:
     @patch("src.scraper.cf_requests.get")
     @patch("src.scraper._get_cf_cookies")
     def test_fetch_html_success(self, mock_cookies, mock_get):
-        mock_cookies.return_value = ({"cf_clearance": "abc"}, "Mozilla/5.0")
+        mock_cookies.return_value = scraper._FlareSolverrResult(
+            cookies={"cf_clearance": "abc"}, user_agent="Mozilla/5.0", response_html=""
+        )
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = "<html>ok</html>"
@@ -101,6 +104,37 @@ class TestFetchHtml:
         result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
         mock_get.assert_called_once()
+
+    @patch("src.scraper.cf_requests.get")
+    @patch("src.scraper._get_cf_cookies")
+    def test_fetch_html_403_falls_back_to_flaresolverr_html(self, mock_cookies, mock_get):
+        """When curl_cffi gets 403, use FlareSolverr's response HTML."""
+        mock_cookies.return_value = scraper._FlareSolverrResult(
+            cookies={"cf_clearance": "abc"}, user_agent="Mozilla/5.0",
+            response_html="<html>flaresolverr content</html>",
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_resp.headers = {"cf-ray": "test-ray"}
+        mock_get.return_value = mock_resp
+
+        result = fetch_html("https://example.com")
+        assert result == "<html>flaresolverr content</html>"
+
+    @patch("src.scraper.cf_requests.get")
+    @patch("src.scraper._get_cf_cookies")
+    def test_fetch_html_403_no_flaresolverr_html_raises(self, mock_cookies, mock_get):
+        """When curl_cffi gets 403 and FlareSolverr HTML is empty, raise FetchError."""
+        mock_cookies.return_value = scraper._FlareSolverrResult(
+            cookies={"cf_clearance": "abc"}, user_agent="Mozilla/5.0", response_html="",
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_resp.headers = {"cf-ray": "test-ray"}
+        mock_get.return_value = mock_resp
+
+        with pytest.raises(FetchError, match="403 and FlareSolverr returned empty"):
+            fetch_html("https://example.com")
 
     @patch("src.scraper._get_cf_cookies")
     def test_fetch_html_flaresolverr_error(self, mock_cookies):

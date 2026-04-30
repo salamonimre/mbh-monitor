@@ -44,8 +44,16 @@ def _extract_chrome_version(user_agent: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _get_cf_cookies(url: str, timeout: int) -> dict[str, str]:
-    """Use FlareSolverr to solve Cloudflare and return bypass cookies."""
+@dataclass
+class _FlareSolverrResult:
+    """Internal result from FlareSolverr: cookies, user agent, and response HTML."""
+    cookies: dict[str, str]
+    user_agent: str
+    response_html: str
+
+
+def _get_cf_cookies(url: str, timeout: int) -> _FlareSolverrResult:
+    """Use FlareSolverr to solve Cloudflare and return bypass cookies + response HTML."""
     flaresolverr_url = config.FLARESOLVERR_URL
     payload = {
         "cmd": "request.get",
@@ -65,51 +73,51 @@ def _get_cf_cookies(url: str, timeout: int) -> dict[str, str]:
         cookies[cookie["name"]] = cookie["value"]
 
     user_agent = data["solution"].get("userAgent", "")
+    response_html = data["solution"].get("response", "")
     chrome_ver = _extract_chrome_version(user_agent)
     ver_info = f" (Chrome {chrome_ver})" if chrome_ver else ""
-    logger.info("Got %d cookies from FlareSolverr%s, impersonate=%s",
-                len(cookies), ver_info, config.CURL_CFFI_IMPERSONATE)
-    return cookies, user_agent
+    logger.info("Got %d cookies from FlareSolverr%s, impersonate=%s, response=%d bytes",
+                len(cookies), ver_info, config.CURL_CFFI_IMPERSONATE, len(response_html))
+    return _FlareSolverrResult(cookies=cookies, user_agent=user_agent, response_html=response_html)
 
 
 def fetch_html(url: str, *, timeout: int | None = None) -> str:
-    """Fetch raw HTML: get Cloudflare cookies via FlareSolverr, then fetch with requests.
+    """Fetch raw HTML: get Cloudflare cookies via FlareSolverr, then fetch with curl_cffi.
 
-    This two-step approach ensures we get the raw SSR HTML (with RSC data)
-    rather than the post-hydration DOM.
+    Two-step approach prefers raw SSR HTML (with RSC data) from curl_cffi.
+    If curl_cffi gets 403 (Cloudflare blocks the IP), falls back to using
+    FlareSolverr's rendered HTML directly.
     """
     timeout = timeout or config.HTTP_TIMEOUT
 
     last_exc: Exception | None = None
     for attempt in range(config.MAX_RETRIES):
         try:
-            # Step 1: Get Cloudflare bypass cookies
-            cookies, user_agent = _get_cf_cookies(url, timeout)
+            # Step 1: Get Cloudflare bypass cookies + response HTML
+            fs_result = _get_cf_cookies(url, timeout)
 
-            # Step 2: Fetch raw HTML with curl_cffi (Chrome TLS fingerprint)
-            # Cloudflare binds cookies to TLS fingerprint, so we must match
-            # the browser fingerprint that FlareSolverr used.
-            headers = {"User-Agent": user_agent} if user_agent else {}
+            # Step 2: Try raw HTML with curl_cffi (Chrome TLS fingerprint)
+            headers = {"User-Agent": fs_result.user_agent} if fs_result.user_agent else {}
             resp = cf_requests.get(
-                url, cookies=cookies, headers=headers,
+                url, cookies=fs_result.cookies, headers=headers,
                 timeout=timeout, impersonate=config.CURL_CFFI_IMPERSONATE,
             )
 
             if resp.status_code == 403:
-                body_snippet = (resp.text or "")[:500]
                 cf_ray = resp.headers.get("cf-ray", "unknown")
-                detail = (
-                    f"HTTP 403 | cf-ray={cf_ray} | "
-                    f"impersonate={config.CURL_CFFI_IMPERSONATE} | "
-                    f"body={body_snippet}"
+                logger.warning(
+                    "curl_cffi got 403 (cf-ray=%s, impersonate=%s), falling back to FlareSolverr HTML",
+                    cf_ray, config.CURL_CFFI_IMPERSONATE,
                 )
-                if "1020" in body_snippet:
-                    raise FetchError(f"Cloudflare 1020 (access denied, likely TLS mismatch): {detail}")
-                raise FetchError(f"HTTP 403 despite cookies: {detail}")
+                if fs_result.response_html:
+                    logger.info("Using FlareSolverr response HTML (%d bytes)", len(fs_result.response_html))
+                    return fs_result.response_html
+                raise FetchError(f"HTTP 403 and FlareSolverr returned empty HTML | cf-ray={cf_ray}")
+
             resp.raise_for_status()
 
             html = resp.text
-            logger.info("Fetched %d bytes of raw HTML", len(html))
+            logger.info("Fetched %d bytes of raw HTML via curl_cffi", len(html))
             return html
 
         except FetchError:
