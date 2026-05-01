@@ -1,0 +1,56 @@
+name: Test Telegram Message
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Send test message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "
+          import json, requests, datetime
+          from zoneinfo import ZoneInfo
+
+          with open('state.json') as f:
+              state = json.load(f)
+
+          now = datetime.datetime.now(ZoneInfo('Europe/Budapest')).strftime('%Y-%m-%d %H:%M')
+          daily_max = state.get('daily_max_value', '?')
+          daily_max_time = state.get('daily_max_time', '?')
+          last_value = state.get('last_value', '?')
+
+          msg = (
+              f'🧪 <b>MBH Monitor – Futtatási teszt</b>\n\n'
+              f'Mai napi maximum: <b>{daily_max}</b> ({daily_max_time})\n'
+              f'Utolsó érték: <b>{last_value}</b>\n'
+              f'Küszöb: 10\n'
+              f'ZenRows fallback: konfigurálva\n'
+              f'Időpont: {now}'
+          )
+
+          import os
+          resp = requests.post(
+              f'https://api.telegram.org/bot{os.environ[\"TELEGRAM_BOT_TOKEN\"]}/sendMessage',
+              json={
+                  'chat_id': os.environ['TELEGRAM_CHAT_ID'],
+                  'text': msg,
+                  'parse_mode': 'HTML',
+                  'disable_web_page_preview': True,
+              },
+              timeout=30,
+          )
+          print(f'Status: {resp.status_code}')
+          print(resp.json())
+          resp.raise_for_status()
+          "
