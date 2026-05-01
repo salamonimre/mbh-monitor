@@ -1,4 +1,7 @@
-"""Downdetector scraper – fetches current report count via FlareSolverr."""
+"""Downdetector scraper – fetches current report count via Cloudflare bypass solver.
+
+Compatible with both FlareSolverr and ByParr (solver-agnostic).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,6 @@ import json
 import logging
 import re
 import time
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -39,53 +41,25 @@ class ParseResult:
 
 
 @dataclass
-class _FlareSolverrResult:
-    """Internal result from FlareSolverr."""
+class _SolverResult:
+    """Internal result from Cloudflare bypass solver."""
     response_html: str
     user_agent: str
 
 
-def _create_session(session_id: str) -> None:
-    """Create a fresh FlareSolverr browser session."""
-    payload = {"cmd": "sessions.create", "session": session_id}
-    resp = requests.post(config.FLARESOLVERR_URL, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("status") != "ok":
-        raise FetchError(f"Session create failed: {data.get('message', 'unknown')}")
-    logger.info("FlareSolverr session created: %s", session_id)
+def _solver_fetch(url: str) -> _SolverResult:
+    """Fetch a URL via Cloudflare bypass solver (FlareSolverr or ByParr).
 
-
-def _destroy_session(session_id: str) -> None:
-    """Destroy a FlareSolverr browser session (best-effort, never raises)."""
-    try:
-        payload = {"cmd": "sessions.destroy", "session": session_id}
-        resp = requests.post(config.FLARESOLVERR_URL, json=payload, timeout=10)
-        if resp.status_code == 200:
-            logger.info("FlareSolverr session destroyed: %s", session_id)
-        else:
-            logger.warning("Session destroy returned %d for %s", resp.status_code, session_id)
-    except Exception as exc:
-        logger.warning("Session destroy failed for %s: %s", session_id, exc)
-
-
-def _flaresolverr_fetch(url: str, *, session_id: str | None = None) -> _FlareSolverrResult:
-    """Use FlareSolverr to fetch a URL, solving Cloudflare challenges.
-
-    Args:
-        url: The URL to fetch.
-        session_id: Optional FlareSolverr session ID for browser instance isolation.
-
-    Returns:
-        _FlareSolverrResult with the page HTML and user agent.
+    Sends both timeout formats for cross-compatibility:
+    - maxTimeout (camelCase, ms) for FlareSolverr
+    - max_timeout (snake_case, seconds) for ByParr
     """
     payload: dict = {
         "cmd": "request.get",
         "url": url,
         "maxTimeout": config.FLARESOLVERR_MAX_TIMEOUT,
+        "max_timeout": config.FLARESOLVERR_MAX_TIMEOUT // 1000,
     }
-    if session_id:
-        payload["session"] = session_id
     if config.FLARESOLVERR_PROXY:
         payload["proxy"] = {"url": config.FLARESOLVERR_PROXY}
 
@@ -96,51 +70,46 @@ def _flaresolverr_fetch(url: str, *, session_id: str | None = None) -> _FlareSol
     data = resp.json()
 
     if data.get("status") != "ok":
-        raise FetchError(f"FlareSolverr error: {data.get('message', 'unknown')}")
+        raise FetchError(f"Solver error: {data.get('message', 'unknown')}")
 
     solution = data.get("solution", {})
     response_html = solution.get("response", "")
     user_agent = solution.get("userAgent", "")
 
     if not response_html:
-        raise FetchError("FlareSolverr returned empty response HTML")
+        raise FetchError("Solver returned empty response HTML")
 
-    logger.info("FlareSolverr fetched %d bytes (session=%s)",
-                len(response_html), session_id or "default")
-    return _FlareSolverrResult(response_html=response_html, user_agent=user_agent)
+    logger.info("Solver fetched %d bytes", len(response_html))
+    return _SolverResult(response_html=response_html, user_agent=user_agent)
 
 
-def _check_flaresolverr_health() -> None:
-    """Quick health check – fail fast if FlareSolverr is unreachable.
+def _check_solver_health() -> None:
+    """Quick health check – fail fast if solver is unreachable.
 
-    FlareSolverr's /v1 only accepts POST (returns 405 on GET), so we just
-    check connectivity – any HTTP response means the server is running.
+    The solver's /v1 endpoint only accepts POST (returns 405 on GET),
+    so we just check connectivity – any HTTP response means the server is running.
     """
     try:
         requests.get(config.FLARESOLVERR_URL, timeout=5)
-        logger.info("FlareSolverr health check OK")
+        logger.info("Solver health check OK")
     except requests.ConnectionError as exc:
-        raise FetchError(f"FlareSolverr unreachable at {config.FLARESOLVERR_URL}: {exc}") from exc
+        raise FetchError(f"Solver unreachable at {config.FLARESOLVERR_URL}: {exc}") from exc
 
 
 def fetch_html(url: str, *, timeout: int | None = None) -> str:
-    """Fetch HTML via FlareSolverr with session rotation.
+    """Fetch HTML via Cloudflare bypass solver with retries.
 
-    Each retry attempt creates a fresh FlareSolverr browser session
-    to avoid Cloudflare fingerprint-based blocking. Sessions are always
-    cleaned up in the finally block.
+    No session management – the solver handles browser lifecycle internally.
     """
-    _check_flaresolverr_health()
+    _check_solver_health()
 
     last_exc: Exception | None = None
 
     for attempt in range(config.MAX_RETRIES):
-        session_id = f"mbh-{uuid.uuid4().hex[:12]}"
         try:
-            _create_session(session_id)
-            result = _flaresolverr_fetch(url, session_id=session_id)
-            logger.info("Fetched %d bytes via FlareSolverr (attempt %d, session %s)",
-                        len(result.response_html), attempt + 1, session_id)
+            result = _solver_fetch(url)
+            logger.info("Fetched %d bytes (attempt %d)",
+                        len(result.response_html), attempt + 1)
             return result.response_html
 
         except Exception as exc:
@@ -150,8 +119,6 @@ def fetch_html(url: str, *, timeout: int | None = None) -> str:
                 logger.warning("Attempt %d failed (%s), retrying in %.1fs",
                                attempt + 1, exc, wait)
                 time.sleep(wait)
-        finally:
-            _destroy_session(session_id)
 
     raise last_exc or FetchError("All retries exhausted")
 

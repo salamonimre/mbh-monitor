@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src import scraper
+from src import scraper, config
 from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, parse_reports, fetch_html, get_current_value
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -89,39 +89,10 @@ class TestParseReports:
         assert result.points[-1].value == 3
 
 
-class TestSessionManagement:
+class TestSolverFetch:
     @patch("src.scraper.requests.post")
-    def test_create_session_success(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"status": "ok"}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        scraper._create_session("test-session-1")
-        payload = mock_post.call_args[1]["json"]
-        assert payload["cmd"] == "sessions.create"
-        assert payload["session"] == "test-session-1"
-
-    @patch("src.scraper.requests.post")
-    def test_create_session_failure_raises(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"status": "error", "message": "session limit"}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        with pytest.raises(FetchError, match="Session create failed"):
-            scraper._create_session("test-session-2")
-
-    @patch("src.scraper.requests.post")
-    def test_destroy_session_best_effort(self, mock_post):
-        """Destroy should not raise, even on error."""
-        mock_post.side_effect = ConnectionError("FlareSolverr down")
-        scraper._destroy_session("test-session-3")  # Should not raise
-
-    @patch("src.scraper.requests.post")
-    def test_flaresolverr_fetch_with_session(self, mock_post):
+    def test_solver_fetch_success(self, mock_post):
+        """Solver fetch returns HTML and user agent."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
@@ -134,14 +105,31 @@ class TestSessionManagement:
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
 
-        result = scraper._flaresolverr_fetch("https://example.com", session_id="sess-1")
+        result = scraper._solver_fetch("https://example.com")
         assert result.response_html == "<html>content</html>"
         payload = mock_post.call_args[1]["json"]
-        assert payload["session"] == "sess-1"
-        assert payload["maxTimeout"] == 60000
+        assert payload["cmd"] == "request.get"
+        assert payload["url"] == "https://example.com"
 
     @patch("src.scraper.requests.post")
-    def test_flaresolverr_fetch_empty_html_raises(self, mock_post):
+    def test_solver_fetch_sends_dual_timeout(self, mock_post):
+        """Both maxTimeout (ms) and max_timeout (seconds) are sent for cross-compatibility."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "solution": {"response": "<html>ok</html>", "userAgent": "test"},
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        scraper._solver_fetch("https://example.com")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["maxTimeout"] == config.FLARESOLVERR_MAX_TIMEOUT
+        assert payload["max_timeout"] == config.FLARESOLVERR_MAX_TIMEOUT // 1000
+
+    @patch("src.scraper.requests.post")
+    def test_solver_fetch_empty_html_raises(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
@@ -152,12 +140,23 @@ class TestSessionManagement:
         mock_post.return_value = mock_resp
 
         with pytest.raises(FetchError, match="empty response"):
-            scraper._flaresolverr_fetch("https://example.com")
+            scraper._solver_fetch("https://example.com")
+
+    @patch("src.scraper.requests.post")
+    def test_solver_fetch_error_status_raises(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "error", "message": "challenge failed"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(FetchError, match="Solver error"):
+            scraper._solver_fetch("https://example.com")
 
     @patch("src.scraper.config")
     @patch("src.scraper.requests.post")
-    def test_flaresolverr_fetch_with_proxy(self, mock_post, mock_config):
-        """Proxy is passed to FlareSolverr when configured."""
+    def test_solver_fetch_with_proxy(self, mock_post, mock_config):
+        """Proxy is passed to solver when configured."""
         mock_config.FLARESOLVERR_URL = "http://localhost:8191/v1"
         mock_config.FLARESOLVERR_MAX_TIMEOUT = 60000
         mock_config.FLARESOLVERR_PROXY = "http://proxy:8080"
@@ -173,14 +172,14 @@ class TestSessionManagement:
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
 
-        result = scraper._flaresolverr_fetch("https://example.com", session_id="sess-1")
+        result = scraper._solver_fetch("https://example.com")
         assert result.response_html == "<html>via proxy</html>"
         payload = mock_post.call_args[1]["json"]
         assert payload["proxy"] == {"url": "http://proxy:8080"}
 
     @patch("src.scraper.config")
     @patch("src.scraper.requests.post")
-    def test_flaresolverr_fetch_no_proxy_when_empty(self, mock_post, mock_config):
+    def test_solver_fetch_no_proxy_when_empty(self, mock_post, mock_config):
         """No proxy param when FLARESOLVERR_PROXY is empty."""
         mock_config.FLARESOLVERR_URL = "http://localhost:8191/v1"
         mock_config.FLARESOLVERR_MAX_TIMEOUT = 60000
@@ -197,95 +196,63 @@ class TestSessionManagement:
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
 
-        result = scraper._flaresolverr_fetch("https://example.com")
+        scraper._solver_fetch("https://example.com")
         payload = mock_post.call_args[1]["json"]
         assert "proxy" not in payload
 
 
 class TestFetchHtml:
-    @patch("src.scraper._check_flaresolverr_health")
-    @patch("src.scraper._destroy_session")
-    @patch("src.scraper._flaresolverr_fetch")
-    @patch("src.scraper._create_session")
-    def test_fetch_html_success(self, mock_create, mock_fetch, mock_destroy, mock_health):
-        mock_fetch.return_value = scraper._FlareSolverrResult(
+    @patch("src.scraper._check_solver_health")
+    @patch("src.scraper._solver_fetch")
+    def test_fetch_html_success(self, mock_fetch, mock_health):
+        mock_fetch.return_value = scraper._SolverResult(
             response_html="<html>ok</html>", user_agent="Mozilla/5.0",
         )
 
         result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
-        mock_create.assert_called_once()
-        mock_destroy.assert_called_once()
+        mock_fetch.assert_called_once()
         mock_health.assert_called_once()
 
-    @patch("src.scraper._check_flaresolverr_health")
-    @patch("src.scraper._destroy_session")
-    @patch("src.scraper._flaresolverr_fetch")
-    @patch("src.scraper._create_session")
-    def test_fetch_html_flaresolverr_error(self, mock_create, mock_fetch, mock_destroy, mock_health):
+    @patch("src.scraper._check_solver_health")
+    @patch("src.scraper._solver_fetch")
+    def test_fetch_html_solver_error(self, mock_fetch, mock_health):
         mock_fetch.side_effect = FetchError("Challenge not solved")
 
         with pytest.raises(FetchError, match="Challenge not solved"):
             fetch_html("https://example.com")
 
-    @patch("src.scraper._check_flaresolverr_health")
-    @patch("src.scraper._destroy_session")
-    @patch("src.scraper._flaresolverr_fetch")
-    @patch("src.scraper._create_session")
+    @patch("src.scraper._check_solver_health")
+    @patch("src.scraper._solver_fetch")
     @patch("src.scraper.time.sleep")
-    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_create, mock_fetch, mock_destroy, mock_health):
+    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_fetch, mock_health):
         mock_fetch.side_effect = ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
             fetch_html("https://example.com")
-        assert mock_create.call_count == 3  # MAX_RETRIES
-        assert mock_destroy.call_count == 3  # Cleanup after each attempt
+        assert mock_fetch.call_count == config.MAX_RETRIES
 
-    @patch("src.scraper._check_flaresolverr_health")
-    @patch("src.scraper._destroy_session")
-    @patch("src.scraper._flaresolverr_fetch")
-    @patch("src.scraper._create_session")
+    @patch("src.scraper._check_solver_health")
+    @patch("src.scraper._solver_fetch")
     @patch("src.scraper.time.sleep")
-    def test_session_rotation_uses_unique_ids(self, mock_sleep, mock_create, mock_fetch, mock_destroy, mock_health):
-        """Each retry attempt uses a different session ID."""
+    def test_fetch_html_retries_then_succeeds(self, mock_sleep, mock_fetch, mock_health):
+        """Retry eventually succeeds."""
         mock_fetch.side_effect = [
             ConnectionError("timeout"),
             ConnectionError("timeout"),
-            scraper._FlareSolverrResult(response_html="<html>ok</html>", user_agent="test"),
+            scraper._SolverResult(response_html="<html>ok</html>", user_agent="test"),
         ]
 
         result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
-        assert mock_create.call_count == 3
-        assert mock_destroy.call_count == 3
-
-        # All session IDs should be unique
-        session_ids = [call[0][0] for call in mock_create.call_args_list]
-        assert len(set(session_ids)) == 3
-        assert all(sid.startswith("mbh-") for sid in session_ids)
-
-    @patch("src.scraper._check_flaresolverr_health")
-    @patch("src.scraper._destroy_session")
-    @patch("src.scraper._flaresolverr_fetch")
-    @patch("src.scraper._create_session")
-    def test_session_cleanup_on_success(self, mock_create, mock_fetch, mock_destroy, mock_health):
-        """Session is destroyed even on successful fetch."""
-        mock_fetch.return_value = scraper._FlareSolverrResult(
-            response_html="<html>ok</html>", user_agent="test",
-        )
-
-        fetch_html("https://example.com")
-        # Verify the same session ID was created and destroyed
-        created_id = mock_create.call_args[0][0]
-        destroyed_id = mock_destroy.call_args[0][0]
-        assert created_id == destroyed_id
+        assert mock_fetch.call_count == 3
 
     @patch("src.scraper.requests.get")
     def test_health_check_fails_raises_fetch_error(self, mock_get):
-        """FlareSolverr unreachable -> FetchError before any retry."""
+        """Solver unreachable -> FetchError before any retry."""
         mock_get.side_effect = requests.ConnectionError("Connection refused")
 
-        with pytest.raises(FetchError, match="FlareSolverr unreachable"):
+        with pytest.raises(FetchError, match="Solver unreachable"):
             fetch_html("https://example.com")
 
 

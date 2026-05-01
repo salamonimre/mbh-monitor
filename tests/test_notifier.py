@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from src import config
 from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, _send_telegram
 
 
@@ -28,7 +29,7 @@ class TestSendTelegram:
 
         result = _send_telegram("test msg", token="tok", chat_id="123", session=mock_session)
         assert result is False
-        assert mock_session.post.call_count == 3  # MAX_RETRIES
+        assert mock_session.post.call_count == config.MAX_RETRIES
 
     def test_retries_on_exception(self):
         mock_session = MagicMock()

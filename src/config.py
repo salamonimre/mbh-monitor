@@ -24,7 +24,7 @@ FLARESOLVERR_URL: str = os.environ.get(
 
 HTTP_TIMEOUT: int = 60
 
-MAX_RETRIES: int = 3
+MAX_RETRIES: int = int(os.environ.get("MAX_RETRIES", "5"))
 RETRY_BACKOFF_BASE: float = 2.0
 
 CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3

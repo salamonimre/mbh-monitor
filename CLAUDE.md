@@ -89,16 +89,15 @@ A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás k
 ### 5. Graceful failure + fetch recovery
 Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik (3+), értesít róla. Amikor a lekérdezés helyreáll, **fetch recovery értesítést** küld (korábbi hibaszám, aktuális érték, stratégia).
 
-### 6. Cloudflare-reziliens scraping (többrétegű védelem)
-A `fetch_html()` FlareSolverr **session rotation**-t használ: minden retry kísérlet friss browser session-nel indul (`sessions.create`), és a `finally` blokkban mindig takarít (`sessions.destroy`). Ez biztosítja, hogy a Cloudflare ne tudja fingerprint alapján blokkolni az összes kísérletet – minden retry egy "új bot".
+### 6. Cloudflare-reziliens scraping (solver-agnosztikus, többrétegű védelem)
+A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt működik. A `_solver_fetch()` mindkét timeout formátumot küldi (`maxTimeout` ms-ben + `max_timeout` másodpercben), így a solver-csere deploy nélkül, GitHub variable-ből megoldható.
 
-- **Session ID**: `mbh-{uuid}` formátum, kísérletenként egyedi
+- **Solver**: a `SOLVER_IMAGE` GitHub variable határozza meg (FlareSolverr vagy ByParr). A kód session management nélkül működik – a solver maga kezeli a browser lifecycle-t.
 - **Timeout**: 60s a Cloudflare challenge megoldására (`FLARESOLVERR_MAX_TIMEOUT`)
-- **Retry**: 3 kísérlet exponenciális backoff-fal (2s, 4s)
+- **Retry**: 5 kísérlet exponenciális backoff-fal (2s, 4s, 8s, 16s) – `MAX_RETRIES` env var-ral állítható
 - **Jitter**: 0-90s véletlenszerű várakozás minden futás elején, hogy a lekérdezés ne mindig ugyanabban a pillanatban induljon
-- **Health check**: a retry loop előtt gyors GET a FlareSolverr-hez – ha nem elérhető, azonnali `FetchError` a 3×60s timeout helyett
+- **Health check**: a retry loop előtt gyors GET a solver-hez – ha nem elérhető, azonnali `FetchError` a 5×60s timeout helyett
 - **Proxy support**: opcionális `FLARESOLVERR_PROXY` env var, ha a GitHub Actions IP blokkolva van
-- **Solver image**: a workflow-ban `SOLVER_IMAGE` GitHub variable-ként paraméterezhető – FlareSolverr/ByParr csere deploy nélkül
 - **Fetch megbízhatóság**: napi (`daily_total_fetches`/`daily_failed_fetches`) és kumulatív (`total_fetches`/`failed_fetches`) számlálók, napi % a napi összefoglalóban
 
 ### 7. Scraping respectful
@@ -118,8 +117,7 @@ Minden futás teljes log-trace-t hagy a GitHub Actions logban, amiből visszaál
 - **Recent points**: RSC parse után az utolsó 5 adatpont (`value@HH:MM` formátum)
 - **State loaded**: betöltéskori állapot összefoglaló
 - **Jitter delay**: `Jitter delay: X.Xs` – véletlenszerű indulási késleltetés
-- **Health check**: `FlareSolverr health check OK` – solver elérhetőség
-- **Session lifecycle**: `FlareSolverr session created/destroyed: mbh-{uuid}` – session rotation nyomkövetés
+- **Health check**: `Solver health check OK` – solver elérhetőség
 - **Fetch recovery**: `Fetch recovery notification -> ok=True/False` – helyreállás értesítés eredménye
 - **Run complete**: sikeres út (`value, daily_max, action, strategy`) és hiba út (`failures, error_alert_sent`)
 
@@ -168,7 +166,8 @@ gh workflow run monitor.yml
 | `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
 | `HEARTBEAT_HOURS` | nem | Heartbeat órák vesszővel (Budapest TZ), default `9,19`. Az utolsó óra napi összefoglalót küld. |
 | `PAT_EXPIRY_DATE` | nem | cron-job.org PAT lejárati dátum (`YYYY-MM-DD`), default `2026-07-25`. 30 napon belül figyelmeztet a napi összefoglalóban. |
-| `FLARESOLVERR_MAX_TIMEOUT` | nem | FlareSolverr challenge timeout ms-ben, default `60000`. Növeld ha a Cloudflare challenge timeout-ol. |
+| `MAX_RETRIES` | nem | Fetch retry kísérletek száma, default `5`. |
+| `FLARESOLVERR_MAX_TIMEOUT` | nem | Solver challenge timeout ms-ben, default `60000`. Növeld ha a Cloudflare challenge timeout-ol. |
 | `FLARESOLVERR_PROXY` | nem | Proxy URL a FlareSolverr-nek (pl. `http://user:pass@proxy:8080`). Ha a GitHub Actions IP blokkolva van. |
 | `JITTER_MAX_SECONDS` | nem | Max indulási késleltetés másodpercben, default `90`. Cloudflare timing-detection ellen. |
 | `SOLVER_IMAGE` | nem | Docker image a challenge solver-hez (GitHub Actions variable). Default: `ghcr.io/flaresolverr/flaresolverr:latest`. ByParr csere: `ghcr.io/thephaseless/byparr:latest`. |
