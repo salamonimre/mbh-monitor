@@ -63,17 +63,22 @@ class TestDailyStats:
 
     def test_reset_on_new_day(self):
         state = State(daily_max_value=50, daily_max_time="14:30",
-                      daily_max_date="2026-04-22", daily_alert_times=["14:20"])
+                      daily_max_date="2026-04-22", daily_alert_times=["14:20"],
+                      daily_total_fetches=48, daily_failed_fetches=2)
         _reset_daily_stats_if_needed(state, "2026-04-23")
         assert state.daily_max_value == 0
         assert state.daily_max_time is None
         assert state.daily_max_date == "2026-04-23"
         assert state.daily_alert_times == []
+        assert state.daily_total_fetches == 0
+        assert state.daily_failed_fetches == 0
 
     def test_no_reset_same_day(self):
-        state = State(daily_max_value=50, daily_max_time="14:30", daily_max_date="2026-04-23")
+        state = State(daily_max_value=50, daily_max_time="14:30", daily_max_date="2026-04-23",
+                      daily_total_fetches=10, daily_failed_fetches=1)
         _reset_daily_stats_if_needed(state, "2026-04-23")
         assert state.daily_max_value == 50
+        assert state.daily_total_fetches == 10
 
     def test_update_max_when_higher(self):
         state = State(daily_max_value=10, daily_max_time="10:00")
@@ -496,7 +501,10 @@ class TestFetchStats:
     def test_success_increments_total(self, mock_html, mock_parse, tmp_path):
         mock_parse.return_value = _make_result(5)
         state_path = tmp_path / "state.json"
-        save(State(total_fetches=10, failed_fetches=2), state_path)
+        today = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
+        save(State(total_fetches=10, failed_fetches=2,
+                   daily_total_fetches=5, daily_failed_fetches=1,
+                   daily_max_date=today), state_path)
 
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
@@ -512,12 +520,17 @@ class TestFetchStats:
         loaded = load(state_path)
         assert loaded.total_fetches == 11
         assert loaded.failed_fetches == 2  # unchanged
+        assert loaded.daily_total_fetches == 6
+        assert loaded.daily_failed_fetches == 1  # unchanged
 
     @patch("src.main.send_fetch_failure_alert")
     @patch("src.main.fetch_html", side_effect=Exception("down"))
     def test_failure_increments_both(self, mock_html, mock_fail_alert, tmp_path):
         state_path = tmp_path / "state.json"
-        save(State(total_fetches=10, failed_fetches=2), state_path)
+        today = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
+        save(State(total_fetches=10, failed_fetches=2,
+                   daily_total_fetches=5, daily_failed_fetches=1,
+                   daily_max_date=today), state_path)
 
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
@@ -531,6 +544,8 @@ class TestFetchStats:
         loaded = load(state_path)
         assert loaded.total_fetches == 11
         assert loaded.failed_fetches == 3
+        assert loaded.daily_total_fetches == 6
+        assert loaded.daily_failed_fetches == 2
 
 
 class TestHeartbeatIntegration:

@@ -30,6 +30,9 @@ class State:
     # Fetch reliability counters (cumulative, never reset)
     total_fetches: int = 0
     failed_fetches: int = 0
+    # Daily fetch stats (reset at midnight Budapest TZ with other daily stats)
+    daily_total_fetches: int = 0
+    daily_failed_fetches: int = 0
 
     def to_dict(self) -> dict:
         d = asdict(self)

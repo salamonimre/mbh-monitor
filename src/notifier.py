@@ -137,7 +137,7 @@ def send_daily_summary(
     if fetch_stats and fetch_stats[0] > 0:
         total, failed = fetch_stats
         success_rate = ((total - failed) / total) * 100
-        reliability_section = f"Megbízhatóság: {success_rate:.0f}% ({total - failed}/{total} sikeres)\n"
+        reliability_section = f"Mai megbízhatóság: {success_rate:.0f}% ({total - failed}/{total} sikeres)\n"
 
     warning_section = ""
     if warnings:

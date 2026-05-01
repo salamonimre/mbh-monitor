@@ -70,6 +70,8 @@ def _reset_daily_stats_if_needed(state: State, today_str: str) -> None:
         state.daily_max_time = None
         state.daily_max_date = today_str
         state.daily_alert_times = []
+        state.daily_total_fetches = 0
+        state.daily_failed_fetches = 0
 
 
 def _update_daily_stats(state: State, max_value: int, max_time: str | None) -> None:
@@ -176,6 +178,7 @@ def run(state_path: str | None = None) -> int:
 
     # Attempt to fetch and parse report data (split for debug HTML on parse failure)
     state.total_fetches += 1
+    state.daily_total_fetches += 1
     html: str | None = None
     try:
         html = fetch_html(config.DOWNDETECTOR_URL)
@@ -199,6 +202,7 @@ def run(state_path: str | None = None) -> int:
         state.error_alert_sent = False
     except (FetchError, ParseError, Exception) as exc:
         state.failed_fetches += 1
+        state.daily_failed_fetches += 1
         if isinstance(exc, ParseError) and html:
             _save_debug_html(html)
         state.consecutive_fetch_failures += 1
@@ -279,7 +283,7 @@ def run(state_path: str | None = None) -> int:
                 daily_max_time=state.daily_max_time,
                 alert_times=state.daily_alert_times,
                 warnings=warnings,
-                fetch_stats=(state.total_fetches, state.failed_fetches),
+                fetch_stats=(state.daily_total_fetches, state.daily_failed_fetches),
             )
             logger.info("Daily summary notification -> ok=%s", ok)
         else:

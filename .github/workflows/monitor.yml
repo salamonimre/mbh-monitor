@@ -18,8 +18,8 @@ jobs:
     timeout-minutes: 8
 
     services:
-      flaresolverr:
-        image: ghcr.io/flaresolverr/flaresolverr:latest
+      solver:
+        image: ${{ vars.SOLVER_IMAGE || 'ghcr.io/flaresolverr/flaresolverr:latest' }}
         ports:
           - 8191:8191
 
@@ -33,11 +33,11 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Wait for FlareSolverr
+      - name: Wait for solver
         run: |
           for i in $(seq 1 30); do
             curl -s http://localhost:8191/v1 && break
-            echo "Waiting for FlareSolverr... ($i)"
+            echo "Waiting for solver... ($i)"
             sleep 2
           done
 
