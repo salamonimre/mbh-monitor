@@ -201,10 +201,71 @@ class TestSolverFetch:
         assert "proxy" not in payload
 
 
+class TestZenrowsFetch:
+    @patch("src.scraper.requests.get")
+    def test_zenrows_fetch_success(self, mock_get):
+        """ZenRows returns HTML successfully."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<html><body>" + "x" * 100 + "zenrows content</body></html>"
+        mock_resp.headers = {"X-Zen-Remaining-Requests": "4999"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        result = scraper._zenrows_fetch("https://example.com")
+        assert "zenrows content" in result.response_html
+        assert result.user_agent == "ZenRows"
+
+    @patch("src.scraper.config")
+    @patch("src.scraper.requests.get")
+    def test_zenrows_fetch_sends_correct_params(self, mock_get, mock_config):
+        """Validates URL, apikey, js_render, premium_proxy, proxy_country."""
+        mock_config.ZENROWS_API_KEY = "test-key-123"
+        mock_config.ZENROWS_PROXY_COUNTRY = "HU"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<html><body>" + "x" * 100 + "content here</body></html>"
+        mock_resp.headers = {}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        scraper._zenrows_fetch("https://example.com")
+        params = mock_get.call_args[1]["params"]
+        assert params["url"] == "https://example.com"
+        assert params["apikey"] == "test-key-123"
+        assert params["js_render"] == "true"
+        assert params["premium_proxy"] == "true"
+        assert params["proxy_country"] == "HU"
+
+    @patch("src.scraper.requests.get")
+    def test_zenrows_fetch_empty_response_raises(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = ""
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        with pytest.raises(FetchError, match="empty/minimal"):
+            scraper._zenrows_fetch("https://example.com")
+
+    @patch("src.scraper.requests.get")
+    def test_zenrows_fetch_http_error_raises(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("422 Unprocessable")
+        mock_get.return_value = mock_resp
+
+        with pytest.raises(requests.HTTPError):
+            scraper._zenrows_fetch("https://example.com")
+
+
 class TestFetchHtml:
+    @patch("src.scraper.config")
     @patch("src.scraper._check_solver_health")
     @patch("src.scraper._solver_fetch")
-    def test_fetch_html_success(self, mock_fetch, mock_health):
+    def test_fetch_html_success(self, mock_fetch, mock_health, mock_config):
+        mock_config.ZENROWS_API_KEY = ""
+        mock_config.MAX_RETRIES = 5
+        mock_config.RETRY_BACKOFF_BASE = 2.0
         mock_fetch.return_value = scraper._SolverResult(
             response_html="<html>ok</html>", user_agent="Mozilla/5.0",
         )
@@ -214,29 +275,42 @@ class TestFetchHtml:
         mock_fetch.assert_called_once()
         mock_health.assert_called_once()
 
+    @patch("src.scraper.config")
     @patch("src.scraper._check_solver_health")
     @patch("src.scraper._solver_fetch")
-    def test_fetch_html_solver_error(self, mock_fetch, mock_health):
+    def test_fetch_html_solver_error_no_zenrows(self, mock_fetch, mock_health, mock_config):
+        """Solver fails, no ZenRows key → raises."""
+        mock_config.ZENROWS_API_KEY = ""
+        mock_config.MAX_RETRIES = 5
+        mock_config.RETRY_BACKOFF_BASE = 2.0
         mock_fetch.side_effect = FetchError("Challenge not solved")
 
         with pytest.raises(FetchError, match="Challenge not solved"):
             fetch_html("https://example.com")
 
+    @patch("src.scraper.config")
     @patch("src.scraper._check_solver_health")
     @patch("src.scraper._solver_fetch")
     @patch("src.scraper.time.sleep")
-    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_fetch, mock_health):
+    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_fetch, mock_health, mock_config):
+        mock_config.ZENROWS_API_KEY = ""
+        mock_config.MAX_RETRIES = 5
+        mock_config.RETRY_BACKOFF_BASE = 2.0
         mock_fetch.side_effect = ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
             fetch_html("https://example.com")
-        assert mock_fetch.call_count == config.MAX_RETRIES
+        assert mock_fetch.call_count == 5
 
+    @patch("src.scraper.config")
     @patch("src.scraper._check_solver_health")
     @patch("src.scraper._solver_fetch")
     @patch("src.scraper.time.sleep")
-    def test_fetch_html_retries_then_succeeds(self, mock_sleep, mock_fetch, mock_health):
+    def test_fetch_html_retries_then_succeeds(self, mock_sleep, mock_fetch, mock_health, mock_config):
         """Retry eventually succeeds."""
+        mock_config.ZENROWS_API_KEY = ""
+        mock_config.MAX_RETRIES = 5
+        mock_config.RETRY_BACKOFF_BASE = 2.0
         mock_fetch.side_effect = [
             ConnectionError("timeout"),
             ConnectionError("timeout"),
@@ -247,13 +321,71 @@ class TestFetchHtml:
         assert result == "<html>ok</html>"
         assert mock_fetch.call_count == 3
 
+    @patch("src.scraper.config")
     @patch("src.scraper.requests.get")
-    def test_health_check_fails_raises_fetch_error(self, mock_get):
-        """Solver unreachable -> FetchError before any retry."""
+    def test_health_check_fails_no_zenrows_raises(self, mock_get, mock_config):
+        """Solver unreachable, no ZenRows → FetchError."""
+        mock_config.ZENROWS_API_KEY = ""
+        mock_config.FLARESOLVERR_URL = "http://localhost:8191/v1"
         mock_get.side_effect = requests.ConnectionError("Connection refused")
 
         with pytest.raises(FetchError, match="Solver unreachable"):
             fetch_html("https://example.com")
+
+    @patch("src.scraper.config")
+    @patch("src.scraper._zenrows_fetch")
+    @patch("src.scraper._solver_fetch")
+    @patch("src.scraper._check_solver_health")
+    @patch("src.scraper.time.sleep")
+    def test_fallback_to_zenrows_after_solver_failure(self, mock_sleep, mock_health, mock_solver, mock_zenrows, mock_config):
+        """Solver fails all retries → ZenRows fallback succeeds."""
+        mock_config.ZENROWS_API_KEY = "test-key"
+        mock_config.MAX_RETRIES = 2
+        mock_config.RETRY_BACKOFF_BASE = 2.0
+        mock_solver.side_effect = FetchError("challenge failed")
+        mock_zenrows.return_value = scraper._SolverResult(
+            response_html="<html>zenrows ok</html>", user_agent="ZenRows",
+        )
+
+        result = fetch_html("https://example.com")
+        assert result == "<html>zenrows ok</html>"
+        assert mock_solver.call_count == 2
+        mock_zenrows.assert_called_once()
+
+    @patch("src.scraper.config")
+    @patch("src.scraper._zenrows_fetch")
+    @patch("src.scraper._solver_fetch")
+    @patch("src.scraper._check_solver_health")
+    def test_solver_success_skips_zenrows(self, mock_health, mock_solver, mock_zenrows, mock_config):
+        """Solver succeeds → ZenRows is never called."""
+        mock_config.ZENROWS_API_KEY = "test-key"
+        mock_config.MAX_RETRIES = 5
+        mock_config.RETRY_BACKOFF_BASE = 2.0
+        mock_solver.return_value = scraper._SolverResult(
+            response_html="<html>solver ok</html>", user_agent="test",
+        )
+
+        result = fetch_html("https://example.com")
+        assert result == "<html>solver ok</html>"
+        mock_zenrows.assert_not_called()
+
+    @patch("src.scraper.config")
+    @patch("src.scraper._zenrows_fetch")
+    @patch("src.scraper.requests.get")
+    def test_solver_unreachable_falls_back_to_zenrows(self, mock_get, mock_zenrows, mock_config):
+        """Solver health check fails → skips solver, ZenRows fallback."""
+        mock_config.ZENROWS_API_KEY = "test-key"
+        mock_config.FLARESOLVERR_URL = "http://localhost:8191/v1"
+        mock_config.MAX_RETRIES = 5
+        mock_config.RETRY_BACKOFF_BASE = 2.0
+        mock_get.side_effect = requests.ConnectionError("Connection refused")
+        mock_zenrows.return_value = scraper._SolverResult(
+            response_html="<html>zenrows rescue</html>", user_agent="ZenRows",
+        )
+
+        result = fetch_html("https://example.com")
+        assert result == "<html>zenrows rescue</html>"
+        mock_zenrows.assert_called_once()
 
 
 class TestGetCurrentValue:

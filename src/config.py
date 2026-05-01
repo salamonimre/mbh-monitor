@@ -34,6 +34,9 @@ FLARESOLVERR_PROXY: str = os.environ.get("FLARESOLVERR_PROXY", "")
 
 JITTER_MAX_SECONDS: float = float(os.environ.get("JITTER_MAX_SECONDS", "90"))
 
+ZENROWS_API_KEY: str = os.environ.get("ZENROWS_API_KEY", "")
+ZENROWS_PROXY_COUNTRY: str = os.environ.get("ZENROWS_PROXY_COUNTRY", "HU")
+
 PAT_EXPIRY_DATE: str = os.environ.get("PAT_EXPIRY_DATE", "2026-07-25")
 PAT_EXPIRY_WARNING_DAYS: int = 30
 

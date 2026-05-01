@@ -83,6 +83,29 @@ def _solver_fetch(url: str) -> _SolverResult:
     return _SolverResult(response_html=response_html, user_agent=user_agent)
 
 
+def _zenrows_fetch(url: str) -> _SolverResult:
+    """Fetch a URL via ZenRows API (JS rendering + premium proxy for CF bypass)."""
+    params = {
+        "url": url,
+        "apikey": config.ZENROWS_API_KEY,
+        "js_render": "true",
+        "premium_proxy": "true",
+    }
+    if config.ZENROWS_PROXY_COUNTRY:
+        params["proxy_country"] = config.ZENROWS_PROXY_COUNTRY
+
+    resp = requests.get("https://api.zenrows.com/v1/", params=params, timeout=120)
+    resp.raise_for_status()
+    html = resp.text
+
+    if not html or len(html) < 100:
+        raise FetchError("ZenRows returned empty/minimal response")
+
+    remaining = resp.headers.get("X-Zen-Remaining-Requests", "?")
+    logger.info("ZenRows fetched %d bytes (remaining credits: %s)", len(html), remaining)
+    return _SolverResult(response_html=html, user_agent="ZenRows")
+
+
 def _check_solver_health() -> None:
     """Quick health check – fail fast if solver is unreachable.
 
@@ -97,30 +120,51 @@ def _check_solver_health() -> None:
 
 
 def fetch_html(url: str, *, timeout: int | None = None) -> str:
-    """Fetch HTML via Cloudflare bypass solver with retries.
+    """Fetch HTML via solver with ZenRows fallback.
 
-    No session management – the solver handles browser lifecycle internally.
+    Flow:
+    1. Health-check solver → if reachable, try MAX_RETRIES times
+    2. If solver unavailable or all retries fail AND ZENROWS_API_KEY set → ZenRows fallback
+    3. If everything fails → raise last exception
     """
-    _check_solver_health()
-
     last_exc: Exception | None = None
+    solver_available = True
 
-    for attempt in range(config.MAX_RETRIES):
+    try:
+        _check_solver_health()
+    except FetchError as exc:
+        solver_available = False
+        last_exc = exc
+        if not config.ZENROWS_API_KEY:
+            raise
+
+    if solver_available:
+        for attempt in range(config.MAX_RETRIES):
+            try:
+                result = _solver_fetch(url)
+                logger.info("Fetched %d bytes via solver (attempt %d)",
+                            len(result.response_html), attempt + 1)
+                return result.response_html
+            except Exception as exc:
+                last_exc = exc
+                if attempt < config.MAX_RETRIES - 1:
+                    wait = config.RETRY_BACKOFF_BASE ** (attempt + 1)
+                    logger.warning("Solver attempt %d failed (%s), retrying in %.1fs",
+                                   attempt + 1, exc, wait)
+                    time.sleep(wait)
+
+    # ZenRows fallback
+    if config.ZENROWS_API_KEY:
+        logger.warning("Solver exhausted, trying ZenRows fallback")
         try:
-            result = _solver_fetch(url)
-            logger.info("Fetched %d bytes (attempt %d)",
-                        len(result.response_html), attempt + 1)
+            result = _zenrows_fetch(url)
+            logger.info("Fetched %d bytes via ZenRows fallback", len(result.response_html))
             return result.response_html
-
         except Exception as exc:
+            logger.error("ZenRows fallback also failed: %s", exc)
             last_exc = exc
-            if attempt < config.MAX_RETRIES - 1:
-                wait = config.RETRY_BACKOFF_BASE ** (attempt + 1)
-                logger.warning("Attempt %d failed (%s), retrying in %.1fs",
-                               attempt + 1, exc, wait)
-                time.sleep(wait)
 
-    raise last_exc or FetchError("All retries exhausted")
+    raise last_exc or FetchError("All fetch methods exhausted")
 
 
 def _parse_rsc_strategy(html: str) -> list[ReportPoint]:

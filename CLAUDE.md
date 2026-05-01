@@ -98,6 +98,7 @@ A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt m
 - **Jitter**: 0-90s véletlenszerű várakozás minden futás elején, hogy a lekérdezés ne mindig ugyanabban a pillanatban induljon
 - **Health check**: a retry loop előtt gyors GET a solver-hez – ha nem elérhető, azonnali `FetchError` a 5×60s timeout helyett
 - **Proxy support**: opcionális `FLARESOLVERR_PROXY` env var, ha a GitHub Actions IP blokkolva van
+- **ZenRows fallback**: ha a solver (ByParr/FlareSolverr) összes retry-ja elbukik ÉS `ZENROWS_API_KEY` be van állítva → ZenRows API-n keresztül próbálja (JS rendering + premium proxy, $49/hó). Ha nincs API key, a viselkedés a régi marad.
 - **Fetch megbízhatóság**: napi (`daily_total_fetches`/`daily_failed_fetches`) és kumulatív (`total_fetches`/`failed_fetches`) számlálók, napi % a napi összefoglalóban
 
 ### 7. Scraping respectful
@@ -170,6 +171,8 @@ gh workflow run monitor.yml
 | `FLARESOLVERR_MAX_TIMEOUT` | nem | Solver challenge timeout ms-ben, default `60000`. Növeld ha a Cloudflare challenge timeout-ol. |
 | `FLARESOLVERR_PROXY` | nem | Proxy URL a FlareSolverr-nek (pl. `http://user:pass@proxy:8080`). Ha a GitHub Actions IP blokkolva van. |
 | `JITTER_MAX_SECONDS` | nem | Max indulási késleltetés másodpercben, default `90`. Cloudflare timing-detection ellen. |
+| `ZENROWS_API_KEY` | nem | ZenRows API key a fizetős fallback-hez. Ha üres, nincs ZenRows fallback. |
+| `ZENROWS_PROXY_COUNTRY` | nem | ZenRows proxy ország kód, default `HU`. |
 | `SOLVER_IMAGE` | nem | Docker image a challenge solver-hez (GitHub Actions variable). Default: `ghcr.io/flaresolverr/flaresolverr:latest`. ByParr csere: `ghcr.io/thephaseless/byparr:latest`. |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
