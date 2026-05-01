@@ -22,14 +22,14 @@ FLARESOLVERR_URL: str = os.environ.get(
     "http://localhost:8191/v1",
 )
 
-HTTP_TIMEOUT: int = 30
+HTTP_TIMEOUT: int = 60
 
 MAX_RETRIES: int = 3
 RETRY_BACKOFF_BASE: float = 2.0
 
 CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3
 
-CURL_CFFI_IMPERSONATE: str = os.environ.get("CURL_CFFI_IMPERSONATE", "chrome136")
+FLARESOLVERR_MAX_TIMEOUT: int = int(os.environ.get("FLARESOLVERR_MAX_TIMEOUT", "60000"))
 
 PAT_EXPIRY_DATE: str = os.environ.get("PAT_EXPIRY_DATE", "2026-07-25")
 PAT_EXPIRY_WARNING_DAYS: int = 30

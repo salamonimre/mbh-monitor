@@ -86,30 +86,40 @@ A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás k
 - A script idempotens, a heartbeat deduplikált (`state.json`) → dupla futás nem okoz dupla értesítést
 - A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2026-07-25** — lejárat előtt rotálni kell.
 
-### 5. Graceful failure
-Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik, értesít róla. Monitoring dashboard nélkül ez a legolcsóbb "van-e baj" jelzés.
+### 5. Graceful failure + fetch recovery
+Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik (3+), értesít róla. Amikor a lekérdezés helyreáll, **fetch recovery értesítést** küld (korábbi hibaszám, aktuális érték, stratégia).
 
-### 6. Scraping respectful
-- User-Agent reális
+### 6. Cloudflare-reziliens scraping (session rotation)
+A `fetch_html()` FlareSolverr **session rotation**-t használ: minden retry kísérlet friss browser session-nel indul (`sessions.create`), és a `finally` blokkban mindig takarít (`sessions.destroy`). Ez biztosítja, hogy a Cloudflare ne tudja fingerprint alapján blokkolni az összes kísérletet – minden retry egy "új bot".
+
+- **Session ID**: `mbh-{uuid}` formátum, kísérletenként egyedi
+- **Timeout**: 60s a Cloudflare challenge megoldására (`FLARESOLVERR_MAX_TIMEOUT`)
+- **Retry**: 3 kísérlet exponenciális backoff-fal (2s, 4s)
+- **Nem használ curl_cffi-t**: a FlareSolverr HTML közvetlen felhasználása egyszerűbb és megbízhatóbb
+
+### 7. Scraping respectful
+- User-Agent reális (FlareSolverr Chrome)
 - 30 percnél gyakrabban SOHA nem kérdez le
 - Ha 429-et kapunk, exponenciális backoff
 
-### 7. Strukturált logolás (post-mortem rekonstrukció)
+### 8. Strukturált logolás (post-mortem rekonstrukció)
 Minden futás teljes log-trace-t hagy a GitHub Actions logban, amiből visszaállítható egy napi riport. Kulcs log sorok:
 - **Run started**: küszöb, heartbeat órák, state összefoglaló (value, failures, alert_active)
 - **Chart max today**: napi chart maximum + korábbi daily_max összehasonlítás
 - **Daily max updated**: mikor/miért változik a napi csúcs
 - **No action needed / ALERT / RECOVERY**: döntés indoklása (value, threshold, alert_active)
 - **Telegram eredmény**: minden send hívás után `-> ok=True/False`
-- **Üzenettípus**: a `_send_telegram` `msg_type` keyword-only paraméterrel logol (`alert`, `recovery`, `heartbeat`, `daily_summary`, `parse_degradation`, `fetch_failure`)
+- **Üzenettípus**: a `_send_telegram` `msg_type` keyword-only paraméterrel logol (`alert`, `recovery`, `heartbeat`, `daily_summary`, `parse_degradation`, `fetch_failure`, `fetch_recovery`)
 - **Heartbeat catchup**: tényleges küldési idő (`actual: HH:MM`) és típus (heartbeat/summary)
 - **Recent points**: RSC parse után az utolsó 5 adatpont (`value@HH:MM` formátum)
 - **State loaded**: betöltéskori állapot összefoglaló
+- **Session lifecycle**: `FlareSolverr session created/destroyed: mbh-{uuid}` – session rotation nyomkövetés
+- **Fetch recovery**: `Fetch recovery notification -> ok=True/False` – helyreállás értesítés eredménye
 - **Run complete**: sikeres út (`value, daily_max, action, strategy`) és hiba út (`failures, error_alert_sent`)
 
 Post-mortem parancs: `gh run view <ID> --log | grep INFO` → teljes napi kép.
 
-### 8. Változásra érzékeny (parse stratégia lánc + degradáció-érzékelés)
+### 9. Változásra érzékeny (parse stratégia lánc + degradáció-érzékelés)
 A Downdetector HTML formátuma bármikor változhat. A `parse_reports()` stratégia lánca:
 1. **RSC** (`rsc`): Next.js `__next_f.push()` payloadokból `dataPoints` tömb — legpontosabb, 96 adatpont
 2. **JSON anywhere** (`json_anywhere`): bármilyen JSON tömb a HTML-ben ami `timestampUtc`/`reportsValue` mezőket tartalmaz — ha az RSC delivery megváltozik de az adatstruktúra nem
@@ -152,7 +162,7 @@ gh workflow run monitor.yml
 | `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
 | `HEARTBEAT_HOURS` | nem | Heartbeat órák vesszővel (Budapest TZ), default `9,19`. Az utolsó óra napi összefoglalót küld. |
 | `PAT_EXPIRY_DATE` | nem | cron-job.org PAT lejárati dátum (`YYYY-MM-DD`), default `2026-07-25`. 30 napon belül figyelmeztet a napi összefoglalóban. |
-| `CURL_CFFI_IMPERSONATE` | nem | curl_cffi TLS fingerprint, default `chrome136`. Változtasd ha Cloudflare blokkolja. |
+| `FLARESOLVERR_MAX_TIMEOUT` | nem | FlareSolverr challenge timeout ms-ben, default `60000`. Növeld ha a Cloudflare challenge timeout-ol. |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
 

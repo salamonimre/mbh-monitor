@@ -88,69 +88,143 @@ class TestParseReports:
         assert result.points[-1].value == 3
 
 
-class TestFetchHtml:
-    @patch("src.scraper.cf_requests.get")
-    @patch("src.scraper._get_cf_cookies")
-    def test_fetch_html_success(self, mock_cookies, mock_get):
-        mock_cookies.return_value = scraper._FlareSolverrResult(
-            cookies={"cf_clearance": "abc"}, user_agent="Mozilla/5.0", response_html=""
-        )
+class TestSessionManagement:
+    @patch("src.scraper.requests.post")
+    def test_create_session_success(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.text = "<html>ok</html>"
+        mock_resp.json.return_value = {"status": "ok"}
         mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
+        mock_post.return_value = mock_resp
+
+        scraper._create_session("test-session-1")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["cmd"] == "sessions.create"
+        assert payload["session"] == "test-session-1"
+
+    @patch("src.scraper.requests.post")
+    def test_create_session_failure_raises(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "error", "message": "session limit"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(FetchError, match="Session create failed"):
+            scraper._create_session("test-session-2")
+
+    @patch("src.scraper.requests.post")
+    def test_destroy_session_best_effort(self, mock_post):
+        """Destroy should not raise, even on error."""
+        mock_post.side_effect = ConnectionError("FlareSolverr down")
+        scraper._destroy_session("test-session-3")  # Should not raise
+
+    @patch("src.scraper.requests.post")
+    def test_flaresolverr_fetch_with_session(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "solution": {
+                "response": "<html>content</html>",
+                "userAgent": "Mozilla/5.0 Test",
+            },
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = scraper._flaresolverr_fetch("https://example.com", session_id="sess-1")
+        assert result.response_html == "<html>content</html>"
+        payload = mock_post.call_args[1]["json"]
+        assert payload["session"] == "sess-1"
+        assert payload["maxTimeout"] == 60000
+
+    @patch("src.scraper.requests.post")
+    def test_flaresolverr_fetch_empty_html_raises(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "solution": {"response": "", "userAgent": ""},
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(FetchError, match="empty response"):
+            scraper._flaresolverr_fetch("https://example.com")
+
+
+class TestFetchHtml:
+    @patch("src.scraper._destroy_session")
+    @patch("src.scraper._flaresolverr_fetch")
+    @patch("src.scraper._create_session")
+    def test_fetch_html_success(self, mock_create, mock_fetch, mock_destroy):
+        mock_fetch.return_value = scraper._FlareSolverrResult(
+            response_html="<html>ok</html>", user_agent="Mozilla/5.0",
+        )
 
         result = fetch_html("https://example.com")
         assert result == "<html>ok</html>"
-        mock_get.assert_called_once()
+        mock_create.assert_called_once()
+        mock_destroy.assert_called_once()
 
-    @patch("src.scraper.cf_requests.get")
-    @patch("src.scraper._get_cf_cookies")
-    def test_fetch_html_403_falls_back_to_flaresolverr_html(self, mock_cookies, mock_get):
-        """When curl_cffi gets 403, use FlareSolverr's response HTML."""
-        mock_cookies.return_value = scraper._FlareSolverrResult(
-            cookies={"cf_clearance": "abc"}, user_agent="Mozilla/5.0",
-            response_html="<html>flaresolverr content</html>",
-        )
-        mock_resp = MagicMock()
-        mock_resp.status_code = 403
-        mock_resp.headers = {"cf-ray": "test-ray"}
-        mock_get.return_value = mock_resp
-
-        result = fetch_html("https://example.com")
-        assert result == "<html>flaresolverr content</html>"
-
-    @patch("src.scraper.cf_requests.get")
-    @patch("src.scraper._get_cf_cookies")
-    def test_fetch_html_403_no_flaresolverr_html_raises(self, mock_cookies, mock_get):
-        """When curl_cffi gets 403 and FlareSolverr HTML is empty, raise FetchError."""
-        mock_cookies.return_value = scraper._FlareSolverrResult(
-            cookies={"cf_clearance": "abc"}, user_agent="Mozilla/5.0", response_html="",
-        )
-        mock_resp = MagicMock()
-        mock_resp.status_code = 403
-        mock_resp.headers = {"cf-ray": "test-ray"}
-        mock_get.return_value = mock_resp
-
-        with pytest.raises(FetchError, match="403 and FlareSolverr returned empty"):
-            fetch_html("https://example.com")
-
-    @patch("src.scraper._get_cf_cookies")
-    def test_fetch_html_flaresolverr_error(self, mock_cookies):
-        mock_cookies.side_effect = FetchError("Challenge not solved")
+    @patch("src.scraper._destroy_session")
+    @patch("src.scraper._flaresolverr_fetch")
+    @patch("src.scraper._create_session")
+    def test_fetch_html_flaresolverr_error(self, mock_create, mock_fetch, mock_destroy):
+        mock_fetch.side_effect = FetchError("Challenge not solved")
 
         with pytest.raises(FetchError, match="Challenge not solved"):
             fetch_html("https://example.com")
 
+    @patch("src.scraper._destroy_session")
+    @patch("src.scraper._flaresolverr_fetch")
+    @patch("src.scraper._create_session")
     @patch("src.scraper.time.sleep")
-    @patch("src.scraper._get_cf_cookies")
-    def test_fetch_html_retries_on_connection_error(self, mock_cookies, mock_sleep):
-        mock_cookies.side_effect = ConnectionError("fail")
+    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_create, mock_fetch, mock_destroy):
+        mock_fetch.side_effect = ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
             fetch_html("https://example.com")
-        assert mock_cookies.call_count == 3  # MAX_RETRIES
+        assert mock_create.call_count == 3  # MAX_RETRIES
+        assert mock_destroy.call_count == 3  # Cleanup after each attempt
+
+    @patch("src.scraper._destroy_session")
+    @patch("src.scraper._flaresolverr_fetch")
+    @patch("src.scraper._create_session")
+    @patch("src.scraper.time.sleep")
+    def test_session_rotation_uses_unique_ids(self, mock_sleep, mock_create, mock_fetch, mock_destroy):
+        """Each retry attempt uses a different session ID."""
+        mock_fetch.side_effect = [
+            ConnectionError("timeout"),
+            ConnectionError("timeout"),
+            scraper._FlareSolverrResult(response_html="<html>ok</html>", user_agent="test"),
+        ]
+
+        result = fetch_html("https://example.com")
+        assert result == "<html>ok</html>"
+        assert mock_create.call_count == 3
+        assert mock_destroy.call_count == 3
+
+        # All session IDs should be unique
+        session_ids = [call[0][0] for call in mock_create.call_args_list]
+        assert len(set(session_ids)) == 3
+        assert all(sid.startswith("mbh-") for sid in session_ids)
+
+    @patch("src.scraper._destroy_session")
+    @patch("src.scraper._flaresolverr_fetch")
+    @patch("src.scraper._create_session")
+    def test_session_cleanup_on_success(self, mock_create, mock_fetch, mock_destroy):
+        """Session is destroyed even on successful fetch."""
+        mock_fetch.return_value = scraper._FlareSolverrResult(
+            response_html="<html>ok</html>", user_agent="test",
+        )
+
+        fetch_html("https://example.com")
+        # Verify the same session ID was created and destroyed
+        created_id = mock_create.call_args[0][0]
+        destroyed_id = mock_destroy.call_args[0][0]
+        assert created_id == destroyed_id
 
 
 class TestGetCurrentValue:

@@ -1,5 +1,4 @@
 requests>=2.31,<3
-curl_cffi>=0.7,<1
 beautifulsoup4>=4.12,<5
 pytest>=7.4,<9
 pytest-cov>=4.1,<6

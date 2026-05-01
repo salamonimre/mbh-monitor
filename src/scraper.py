@@ -6,11 +6,11 @@ import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import requests
-from curl_cffi import requests as cf_requests
 
 from src import config
 
@@ -38,96 +38,103 @@ class ParseResult:
     strategy: str  # "rsc", "json_anywhere", "aria_label", "heading"
 
 
-def _extract_chrome_version(user_agent: str) -> int | None:
-    """Extract major Chrome version from User-Agent string."""
-    match = re.search(r'Chrome/(\d+)', user_agent)
-    return int(match.group(1)) if match else None
-
-
 @dataclass
 class _FlareSolverrResult:
-    """Internal result from FlareSolverr: cookies, user agent, and response HTML."""
-    cookies: dict[str, str]
-    user_agent: str
+    """Internal result from FlareSolverr."""
     response_html: str
+    user_agent: str
 
 
-def _get_cf_cookies(url: str, timeout: int) -> _FlareSolverrResult:
-    """Use FlareSolverr to solve Cloudflare and return bypass cookies + response HTML."""
-    flaresolverr_url = config.FLARESOLVERR_URL
-    payload = {
+def _create_session(session_id: str) -> None:
+    """Create a fresh FlareSolverr browser session."""
+    payload = {"cmd": "sessions.create", "session": session_id}
+    resp = requests.post(config.FLARESOLVERR_URL, json=payload, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "ok":
+        raise FetchError(f"Session create failed: {data.get('message', 'unknown')}")
+    logger.info("FlareSolverr session created: %s", session_id)
+
+
+def _destroy_session(session_id: str) -> None:
+    """Destroy a FlareSolverr browser session (best-effort, never raises)."""
+    try:
+        payload = {"cmd": "sessions.destroy", "session": session_id}
+        resp = requests.post(config.FLARESOLVERR_URL, json=payload, timeout=10)
+        if resp.status_code == 200:
+            logger.info("FlareSolverr session destroyed: %s", session_id)
+        else:
+            logger.warning("Session destroy returned %d for %s", resp.status_code, session_id)
+    except Exception as exc:
+        logger.warning("Session destroy failed for %s: %s", session_id, exc)
+
+
+def _flaresolverr_fetch(url: str, *, session_id: str | None = None) -> _FlareSolverrResult:
+    """Use FlareSolverr to fetch a URL, solving Cloudflare challenges.
+
+    Args:
+        url: The URL to fetch.
+        session_id: Optional FlareSolverr session ID for browser instance isolation.
+
+    Returns:
+        _FlareSolverrResult with the page HTML and user agent.
+    """
+    payload: dict = {
         "cmd": "request.get",
         "url": url,
-        "maxTimeout": timeout * 1000,
+        "maxTimeout": config.FLARESOLVERR_MAX_TIMEOUT,
     }
+    if session_id:
+        payload["session"] = session_id
 
-    resp = requests.post(flaresolverr_url, json=payload, timeout=timeout + 30)
+    http_timeout = config.FLARESOLVERR_MAX_TIMEOUT / 1000 + 30
+
+    resp = requests.post(config.FLARESOLVERR_URL, json=payload, timeout=http_timeout)
     resp.raise_for_status()
     data = resp.json()
 
     if data.get("status") != "ok":
         raise FetchError(f"FlareSolverr error: {data.get('message', 'unknown')}")
 
-    cookies = {}
-    for cookie in data["solution"].get("cookies", []):
-        cookies[cookie["name"]] = cookie["value"]
+    solution = data.get("solution", {})
+    response_html = solution.get("response", "")
+    user_agent = solution.get("userAgent", "")
 
-    user_agent = data["solution"].get("userAgent", "")
-    response_html = data["solution"].get("response", "")
-    chrome_ver = _extract_chrome_version(user_agent)
-    ver_info = f" (Chrome {chrome_ver})" if chrome_ver else ""
-    logger.info("Got %d cookies from FlareSolverr%s, impersonate=%s, response=%d bytes",
-                len(cookies), ver_info, config.CURL_CFFI_IMPERSONATE, len(response_html))
-    return _FlareSolverrResult(cookies=cookies, user_agent=user_agent, response_html=response_html)
+    if not response_html:
+        raise FetchError("FlareSolverr returned empty response HTML")
+
+    logger.info("FlareSolverr fetched %d bytes (session=%s)",
+                len(response_html), session_id or "default")
+    return _FlareSolverrResult(response_html=response_html, user_agent=user_agent)
 
 
 def fetch_html(url: str, *, timeout: int | None = None) -> str:
-    """Fetch raw HTML: get Cloudflare cookies via FlareSolverr, then fetch with curl_cffi.
+    """Fetch HTML via FlareSolverr with session rotation.
 
-    Two-step approach prefers raw SSR HTML (with RSC data) from curl_cffi.
-    If curl_cffi gets 403 (Cloudflare blocks the IP), falls back to using
-    FlareSolverr's rendered HTML directly.
+    Each retry attempt creates a fresh FlareSolverr browser session
+    to avoid Cloudflare fingerprint-based blocking. Sessions are always
+    cleaned up in the finally block.
     """
-    timeout = timeout or config.HTTP_TIMEOUT
-
     last_exc: Exception | None = None
+
     for attempt in range(config.MAX_RETRIES):
+        session_id = f"mbh-{uuid.uuid4().hex[:12]}"
         try:
-            # Step 1: Get Cloudflare bypass cookies + response HTML
-            fs_result = _get_cf_cookies(url, timeout)
+            _create_session(session_id)
+            result = _flaresolverr_fetch(url, session_id=session_id)
+            logger.info("Fetched %d bytes via FlareSolverr (attempt %d, session %s)",
+                        len(result.response_html), attempt + 1, session_id)
+            return result.response_html
 
-            # Step 2: Try raw HTML with curl_cffi (Chrome TLS fingerprint)
-            headers = {"User-Agent": fs_result.user_agent} if fs_result.user_agent else {}
-            resp = cf_requests.get(
-                url, cookies=fs_result.cookies, headers=headers,
-                timeout=timeout, impersonate=config.CURL_CFFI_IMPERSONATE,
-            )
-
-            if resp.status_code == 403:
-                cf_ray = resp.headers.get("cf-ray", "unknown")
-                logger.warning(
-                    "curl_cffi got 403 (cf-ray=%s, impersonate=%s), falling back to FlareSolverr HTML",
-                    cf_ray, config.CURL_CFFI_IMPERSONATE,
-                )
-                if fs_result.response_html:
-                    logger.info("Using FlareSolverr response HTML (%d bytes)", len(fs_result.response_html))
-                    return fs_result.response_html
-                raise FetchError(f"HTTP 403 and FlareSolverr returned empty HTML | cf-ray={cf_ray}")
-
-            resp.raise_for_status()
-
-            html = resp.text
-            logger.info("Fetched %d bytes of raw HTML via curl_cffi", len(html))
-            return html
-
-        except FetchError:
-            raise
         except Exception as exc:
             last_exc = exc
             if attempt < config.MAX_RETRIES - 1:
                 wait = config.RETRY_BACKOFF_BASE ** (attempt + 1)
-                logger.warning("Attempt %d failed (%s), retrying in %.1fs", attempt + 1, exc, wait)
+                logger.warning("Attempt %d failed (%s), retrying in %.1fs",
+                               attempt + 1, exc, wait)
                 time.sleep(wait)
+        finally:
+            _destroy_session(session_id)
 
     raise last_exc or FetchError("All retries exhausted")
 
