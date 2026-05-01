@@ -13,6 +13,8 @@ jobs:
         with:
           python-version: '3.11'
 
+      - run: pip install requests
+
       - name: Send test message
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
