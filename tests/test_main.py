@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -423,7 +423,6 @@ class TestErrorAlerting:
     @patch("src.main.fetch_html", side_effect=Exception("FlareSolverr down"))
     def test_notification_sent_after_delay_and_min_failures(self, mock_html, mock_remediation, mock_rem_report, tmp_path):
         """Notification fires when elapsed >= 30min AND failures >= 2."""
-        from datetime import timedelta
         from src.remediation import ErrorCategory, RemediationResult
         mock_remediation.return_value = RemediationResult(
             success=False, error_category=ErrorCategory.SOLVER_UNREACHABLE, attempts=[], duration_s=0.0,
@@ -482,10 +481,9 @@ class TestErrorAlerting:
         mock_rem_report.assert_not_called()
 
     @patch("src.main.send_fetch_recovery", return_value=True)
-    @patch("src.main.send_fetch_failure_alert")
     @patch("src.main.parse_reports")
     @patch("src.main.fetch_html", return_value="<html>ok</html>")
-    def test_success_resets_failure_state(self, mock_html, mock_parse, mock_fail_alert, mock_recovery, tmp_path):
+    def test_success_resets_failure_state(self, mock_html, mock_parse, mock_recovery, tmp_path):
         mock_parse.return_value = _make_result(5)
         state_path = tmp_path / "state.json"
         save(State(consecutive_fetch_failures=4, error_alert_sent=True), state_path)

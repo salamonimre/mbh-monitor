@@ -1,14 +1,12 @@
 """Tests for auto-remediation module."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 import requests
 
 from src.remediation import (
     ErrorCategory,
-    RemediationResult,
     attempt_remediation,
     classify_error,
     _get_cooldown_minutes,

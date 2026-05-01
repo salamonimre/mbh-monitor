@@ -271,7 +271,7 @@ _STRATEGIES: list[tuple[str, str, set[ErrorCategory]]] = [
 ]
 
 # Module reference for dynamic lookup
-import sys as _sys
+import sys as _sys  # noqa: E402
 _THIS_MODULE = _sys.modules[__name__]
 
 

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
 
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 
-from src import config
+from src import config  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

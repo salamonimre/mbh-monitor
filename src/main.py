@@ -13,7 +13,6 @@ from src import config
 from src.notifier import (
     send_alert,
     send_daily_summary,
-    send_fetch_failure_alert,
     send_fetch_recovery,
     send_heartbeat,
     send_parse_degradation_alert,
