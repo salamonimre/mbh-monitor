@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src import scraper
 from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, parse_reports, fetch_html, get_current_value
@@ -282,7 +283,7 @@ class TestFetchHtml:
     @patch("src.scraper.requests.get")
     def test_health_check_fails_raises_fetch_error(self, mock_get):
         """FlareSolverr unreachable -> FetchError before any retry."""
-        mock_get.side_effect = ConnectionError("Connection refused")
+        mock_get.side_effect = requests.ConnectionError("Connection refused")
 
         with pytest.raises(FetchError, match="FlareSolverr unreachable"):
             fetch_html("https://example.com")

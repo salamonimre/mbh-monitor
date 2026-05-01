@@ -111,12 +111,15 @@ def _flaresolverr_fetch(url: str, *, session_id: str | None = None) -> _FlareSol
 
 
 def _check_flaresolverr_health() -> None:
-    """Quick health check – fail fast if FlareSolverr is unreachable."""
+    """Quick health check – fail fast if FlareSolverr is unreachable.
+
+    FlareSolverr's /v1 only accepts POST (returns 405 on GET), so we just
+    check connectivity – any HTTP response means the server is running.
+    """
     try:
-        resp = requests.get(config.FLARESOLVERR_URL, timeout=5)
-        resp.raise_for_status()
+        requests.get(config.FLARESOLVERR_URL, timeout=5)
         logger.info("FlareSolverr health check OK")
-    except Exception as exc:
+    except requests.ConnectionError as exc:
         raise FetchError(f"FlareSolverr unreachable at {config.FLARESOLVERR_URL}: {exc}") from exc
 
 
