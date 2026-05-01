@@ -184,6 +184,80 @@ def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
     return _send_telegram(message, msg_type="fetch_failure", **kwargs)
 
 
+def send_remediation_report(
+    success: bool,
+    error_category: str,
+    consecutive_failures: int,
+    attempts: list[dict],
+    strategy_used: str | None = None,
+    duration_s: float = 0.0,
+    **kwargs,
+) -> bool:
+    """Send remediation result report (success or failure variant).
+
+    Args:
+        success: Whether remediation succeeded.
+        error_category: Human-readable error category.
+        consecutive_failures: Current consecutive failure count.
+        attempts: List of dicts with keys: strategy, result, duration_s, error.
+        strategy_used: Which strategy succeeded (if success=True).
+        duration_s: Total remediation duration.
+    """
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
+
+    attempts_lines = []
+    for a in attempts:
+        line = f"  {'✅' if a['result'] == 'SUCCESS' else '⏭️' if a['result'] == 'SKIPPED' else '❌'} "
+        line += f"<code>{a['strategy']}</code>: {a['result']}"
+        if a.get("duration_s"):
+            line += f" ({a['duration_s']:.1f}s)"
+        if a.get("error"):
+            line += f"\n    <i>{a['error'][:100]}</i>"
+        attempts_lines.append(line)
+
+    attempts_text = "\n".join(attempts_lines) if attempts_lines else "  (nincs)"
+
+    if success:
+        message = (
+            f"🔧 <b>MBH Monitor – Auto-remediation sikeres</b>\n\n"
+            f"Hiba kategória: <code>{error_category}</code>\n"
+            f"Egymás utáni hibák: {consecutive_failures}\n"
+            f"Sikeres stratégia: <code>{strategy_used}</code>\n"
+            f"Időtartam: {duration_s:.1f}s\n\n"
+            f"<b>Próbálkozások:</b>\n{attempts_text}\n\n"
+            f"Időpont: {now}"
+        )
+    else:
+        message = (
+            f"🔴 <b>MBH Monitor – Auto-remediation sikertelen</b>\n\n"
+            f"Hiba kategória: <code>{error_category}</code>\n"
+            f"Egymás utáni hibák: <b>{consecutive_failures}</b>\n"
+            f"Időtartam: {duration_s:.1f}s\n\n"
+            f"<b>Próbálkozások:</b>\n{attempts_text}\n\n"
+            f"<b>Tennivaló:</b>\n"
+            f"  1. Ellenőrizd a GitHub Actions logokat\n"
+            f"  2. Nézd meg a Downdetector oldalt böngészőben\n"
+            f"  3. Ha CF blokkol, fontold meg a solver/proxy cserét\n\n"
+            f"Időpont: {now}"
+        )
+
+    return _send_telegram(message, msg_type="remediation_report", **kwargs)
+
+
+def send_zenrows_credit_warning(credits_remaining: int, **kwargs) -> bool:
+    """Warn when ZenRows credits are running low."""
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
+    message = (
+        f"⚠️ <b>MBH Monitor – ZenRows kredit alacsony</b>\n\n"
+        f"Hátralévő kreditek: <b>{credits_remaining}</b>\n"
+        f"A monitor ZenRows-t használ fallback-ként a scraping hibák javításához.\n"
+        f"Ha a kreditek elfogynak, a fallback nem fog működni.\n\n"
+        f"<b>Tennivaló:</b> Töltsd fel a ZenRows egyenleget vagy válts csomagot.\n"
+        f"Időpont: {now}"
+    )
+    return _send_telegram(message, msg_type="zenrows_credit_warning", **kwargs)
+
+
 def send_fetch_recovery(
     previous_failures: int,
     current_value: int,

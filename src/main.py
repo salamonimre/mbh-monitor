@@ -18,9 +18,12 @@ from src.notifier import (
     send_heartbeat,
     send_parse_degradation_alert,
     send_recovery,
+    send_remediation_report,
+    send_zenrows_credit_warning,
 )
 from pathlib import Path
 
+from src.remediation import attempt_remediation
 from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, fetch_html, parse_reports
 from src.state import State, load, save
 
@@ -34,6 +37,9 @@ BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 
 
 DEBUG_HTML_PATH = Path("/tmp/debug_response.html")
+
+# Escalation: re-send diagnostic report at these failure counts
+_ESCALATION_FAILURES = {6, 12, 24}
 
 
 def _save_debug_html(html: str) -> None:
@@ -148,6 +154,132 @@ def _is_summary_hour(hour: int) -> bool:
     return hour == config.HEARTBEAT_HOURS[-1]
 
 
+def _process_successful_fetch(
+    result: ParseResult,
+    html: str,
+    state: State,
+    now: datetime,
+    budapest_now: datetime,
+    today_str: str,
+    state_path: str,
+    *,
+    via_remediation: str | None = None,
+) -> int:
+    """Process a successful fetch+parse result: degradation check, daily stats, alerts, heartbeat.
+
+    Args:
+        via_remediation: If set, the remediation strategy name that produced this result.
+
+    Returns 0 always (success path).
+    """
+    points = result.points
+    current_value = points[-1].value
+
+    strategy_label = result.strategy
+    if via_remediation:
+        strategy_label = f"{result.strategy} (via {via_remediation})"
+
+    logger.info("Current report count: %d (threshold: %d, strategy: %s)",
+                current_value, config.ALERT_THRESHOLD, strategy_label)
+
+    # Fetch recovery notification
+    if state.error_alert_sent:
+        ok = send_fetch_recovery(
+            previous_failures=state.consecutive_fetch_failures,
+            current_value=current_value,
+            strategy=strategy_label,
+        )
+        logger.info("Fetch recovery notification -> ok=%s (after %d failures)",
+                     ok, state.consecutive_fetch_failures)
+
+    state.consecutive_fetch_failures = 0
+    state.error_alert_sent = False
+    state.remediation_report_sent = False
+    state.first_failure_at = None
+
+    # Degradation detection
+    if result.strategy == "rsc":
+        state.degraded_parse_alert_sent = False
+    elif not state.degraded_parse_alert_sent:
+        logger.warning("Parse degradation: using %s instead of rsc", result.strategy)
+        _save_debug_html(html)
+        ok = send_parse_degradation_alert(result.strategy, current_value)
+        logger.info("Parse degradation alert -> ok=%s", ok)
+        state.degraded_parse_alert_sent = True
+
+    # Update daily stats from chart data
+    chart_max, chart_max_time = _get_chart_max_today(points, budapest_now)
+    logger.info("Chart max today: %d at %s (previous daily_max: %d)",
+                chart_max, chart_max_time or "n/a", state.daily_max_value)
+    if current_value > chart_max:
+        chart_max = current_value
+        chart_max_time = budapest_now.strftime("%H:%M")
+    _update_daily_stats(state, chart_max, chart_max_time)
+
+    # Decide and act
+    action = decide_action(state, current_value, config.ALERT_THRESHOLD)
+
+    if action == "alert":
+        logger.info("ALERT: threshold crossed (%d > %d)", current_value, config.ALERT_THRESHOLD)
+        ok = send_alert(current_value, config.ALERT_THRESHOLD)
+        logger.info("Alert notification -> ok=%s", ok)
+        state.alert_active = True
+        state.alert_started_at = now
+        state.daily_alert_times.append(budapest_now.strftime("%H:%M"))
+    elif action == "recovery":
+        logger.info("RECOVERY: back to normal (%d <= %d)", current_value, config.ALERT_THRESHOLD)
+        ok = send_recovery(current_value, config.ALERT_THRESHOLD)
+        logger.info("Recovery notification -> ok=%s", ok)
+        state.alert_active = False
+        state.alert_started_at = None
+    else:
+        logger.info("No action needed (value=%d, threshold=%d, alert_active=%s)",
+                     current_value, config.ALERT_THRESHOLD, state.alert_active)
+
+    # Update state
+    state.last_value = current_value
+    state.last_checked = now
+
+    # Heartbeat check
+    hb_hour = _get_heartbeat_hour(state, budapest_now)
+    if hb_hour is not None:
+        if _is_summary_hour(hb_hour):
+            logger.info("Sending daily summary (hour %d)", hb_hour)
+            warnings = []
+            pat_warning = _get_pat_expiry_warning()
+            if pat_warning:
+                warnings.append(pat_warning)
+            ok = send_daily_summary(
+                current_value=current_value,
+                threshold=config.ALERT_THRESHOLD,
+                daily_max=state.daily_max_value,
+                daily_max_time=state.daily_max_time,
+                alert_times=state.daily_alert_times,
+                warnings=warnings,
+                fetch_stats=(state.daily_total_fetches, state.daily_failed_fetches),
+            )
+            logger.info("Daily summary notification -> ok=%s", ok)
+        else:
+            last_checked_str = budapest_now.strftime("%H:%M")
+            last_point_ts = points[-1].timestamp
+            if last_point_ts.tzinfo is None:
+                last_point_ts = last_point_ts.replace(tzinfo=timezone.utc)
+            data_time = last_point_ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
+            logger.info("Sending heartbeat (hour %d)", hb_hour)
+            ok = send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str, data_time=data_time, strategy=result.strategy)
+            logger.info("Heartbeat notification -> ok=%s", ok)
+        logger.info("Heartbeat sent for hour %d (actual: %s) | type=%s",
+                     hb_hour, budapest_now.strftime("%H:%M"), "summary" if _is_summary_hour(hb_hour) else "heartbeat")
+        state.heartbeat_sent[str(hb_hour)] = today_str
+
+    log_suffix = f" (via {via_remediation})" if via_remediation else ""
+    logger.info("Run complete%s | value=%d | daily_max=%d | action=%s | strategy=%s",
+                log_suffix, current_value, state.daily_max_value, action, strategy_label)
+    save(state, state_path)
+
+    return 0
+
+
 def run(state_path: str | None = None) -> int:
     """Main execution flow. Returns 0 on success, 1 on catastrophic failure."""
     state_path = state_path or config.STATE_FILE
@@ -183,23 +315,11 @@ def run(state_path: str | None = None) -> int:
     try:
         html = fetch_html(config.DOWNDETECTOR_URL)
         result = parse_reports(html)
-        points = result.points
-        current_value = points[-1].value
-        logger.info("Current report count: %d (threshold: %d, strategy: %s)",
-                     current_value, config.ALERT_THRESHOLD, result.strategy)
 
-        # Fetch recovery notification: if we had sent an error alert, notify that it's resolved
-        if state.error_alert_sent:
-            ok = send_fetch_recovery(
-                previous_failures=state.consecutive_fetch_failures,
-                current_value=current_value,
-                strategy=result.strategy,
-            )
-            logger.info("Fetch recovery notification -> ok=%s (after %d failures)",
-                         ok, state.consecutive_fetch_failures)
+        return _process_successful_fetch(
+            result, html, state, now, budapest_now, today_str, state_path,
+        )
 
-        state.consecutive_fetch_failures = 0
-        state.error_alert_sent = False
     except (FetchError, ParseError, Exception) as exc:
         state.failed_fetches += 1
         state.daily_failed_fetches += 1
@@ -211,99 +331,101 @@ def run(state_path: str | None = None) -> int:
             state.consecutive_fetch_failures,
             exc,
         )
-        if (
-            state.consecutive_fetch_failures >= config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD
-            and not state.error_alert_sent
-        ):
-            ok = send_fetch_failure_alert(state.consecutive_fetch_failures, str(exc))
-            logger.info("Fetch failure alert -> ok=%s", ok)
-            state.error_alert_sent = True
+
+        # Record first failure timestamp for time-based notification
+        if state.first_failure_at is None:
+            state.first_failure_at = now
+            logger.info("First failure in streak recorded at %s", now.isoformat())
+
+        # Immediate remediation on every failure
+        logger.info("Remediation triggered | failures=%d",
+                    state.consecutive_fetch_failures)
+
+        rem_result = attempt_remediation(config.DOWNDETECTOR_URL, exc, state)
+
+        if rem_result.success and rem_result.parse_result and rem_result.html:
+            logger.info("Remediation result: SUCCESS via %s | processing normally",
+                        rem_result.strategy_used)
+
+            # Send success report
+            attempt_dicts = [
+                {"strategy": a.strategy, "result": a.result,
+                 "duration_s": a.duration_s, "error": a.error}
+                for a in rem_result.attempts
+            ]
+            ok = send_remediation_report(
+                success=True,
+                error_category=rem_result.error_category.value,
+                consecutive_failures=state.consecutive_fetch_failures,
+                attempts=attempt_dicts,
+                strategy_used=rem_result.strategy_used,
+                duration_s=rem_result.duration_s,
+            )
+            logger.info("Remediation report sent -> ok=%s", ok)
+
+            # Check ZenRows credit warning
+            if (
+                rem_result.zenrows_credits_remaining is not None
+                and rem_result.zenrows_credits_remaining <= config.ZENROWS_CREDIT_WARNING_THRESHOLD
+            ):
+                ok = send_zenrows_credit_warning(rem_result.zenrows_credits_remaining)
+                logger.info("ZenRows credit warning sent -> ok=%s (remaining: %d)",
+                            ok, rem_result.zenrows_credits_remaining)
+
+            return _process_successful_fetch(
+                rem_result.parse_result, rem_result.html, state, now,
+                budapest_now, today_str, state_path,
+                via_remediation=rem_result.strategy_used,
+            )
+        else:
+            logger.warning("Remediation result: FAILED | checking notification criteria")
+
+            # Time-based notification: elapsed >= N min AND failures >= M
+            elapsed_minutes = (now - state.first_failure_at).total_seconds() / 60
+            is_escalation = state.consecutive_fetch_failures in _ESCALATION_FAILURES
+
+            should_notify = (
+                not state.error_alert_sent
+                and elapsed_minutes >= config.NOTIFICATION_DELAY_MINUTES
+                and state.consecutive_fetch_failures >= config.NOTIFICATION_MIN_FAILURES
+            )
+
+            if should_notify or is_escalation:
+                attempt_dicts = [
+                    {"strategy": a.strategy, "result": a.result,
+                     "duration_s": a.duration_s, "error": a.error}
+                    for a in rem_result.attempts
+                ]
+                ok = send_remediation_report(
+                    success=False,
+                    error_category=rem_result.error_category.value,
+                    consecutive_failures=state.consecutive_fetch_failures,
+                    attempts=attempt_dicts,
+                    duration_s=rem_result.duration_s,
+                )
+                logger.info(
+                    "Remediation report sent -> ok=%s | first_notify=%s | escalation=%s | "
+                    "elapsed=%.0fmin | failure=#%d",
+                    ok, should_notify, is_escalation, elapsed_minutes,
+                    state.consecutive_fetch_failures,
+                )
+                state.error_alert_sent = True
+                state.remediation_report_sent = True
+            else:
+                logger.info(
+                    "Notification suppressed | error_alert_sent=%s | elapsed=%.0fmin | "
+                    "failures=%d | delay_threshold=%dmin | min_failures=%d",
+                    state.error_alert_sent, elapsed_minutes,
+                    state.consecutive_fetch_failures,
+                    config.NOTIFICATION_DELAY_MINUTES, config.NOTIFICATION_MIN_FAILURES,
+                )
+
+            logger.info("Run complete (error+remediation_failed) | failures=%d | category=%s",
+                        state.consecutive_fetch_failures, rem_result.error_category.value)
+
         state.last_checked = now
-        logger.info("Run complete (error) | failures=%d | error_alert_sent=%s",
-                     state.consecutive_fetch_failures, state.error_alert_sent)
         save(state, state_path)
         return 0  # Not catastrophic – we'll retry next run
-
-    # Degradation detection: alert if RSC strategy failed
-    if result.strategy == "rsc":
-        state.degraded_parse_alert_sent = False
-    elif not state.degraded_parse_alert_sent:
-        logger.warning("Parse degradation: using %s instead of rsc", result.strategy)
-        _save_debug_html(html)
-        ok = send_parse_degradation_alert(result.strategy, current_value)
-        logger.info("Parse degradation alert -> ok=%s", ok)
-        state.degraded_parse_alert_sent = True
-
-    # Update daily stats from chart data (covers spikes between runs)
-    chart_max, chart_max_time = _get_chart_max_today(points, budapest_now)
-    logger.info("Chart max today: %d at %s (previous daily_max: %d)",
-                chart_max, chart_max_time or "n/a", state.daily_max_value)
-    if current_value > chart_max:
-        chart_max = current_value
-        chart_max_time = budapest_now.strftime("%H:%M")
-    _update_daily_stats(state, chart_max, chart_max_time)
-
-    # Decide and act
-    action = decide_action(state, current_value, config.ALERT_THRESHOLD)
-
-    if action == "alert":
-        logger.info("ALERT: threshold crossed (%d > %d)", current_value, config.ALERT_THRESHOLD)
-        ok = send_alert(current_value, config.ALERT_THRESHOLD)
-        logger.info("Alert notification -> ok=%s", ok)
-        state.alert_active = True
-        state.alert_started_at = now
-        state.daily_alert_times.append(budapest_now.strftime("%H:%M"))
-    elif action == "recovery":
-        logger.info("RECOVERY: back to normal (%d <= %d)", current_value, config.ALERT_THRESHOLD)
-        ok = send_recovery(current_value, config.ALERT_THRESHOLD)
-        logger.info("Recovery notification -> ok=%s", ok)
-        state.alert_active = False
-        state.alert_started_at = None
-    else:
-        logger.info("No action needed (value=%d, threshold=%d, alert_active=%s)",
-                     current_value, config.ALERT_THRESHOLD, state.alert_active)
-
-    # Update state
-    state.last_value = current_value
-    state.last_checked = now
-
-    # Heartbeat check (runs after normal monitoring)
-    hb_hour = _get_heartbeat_hour(state, budapest_now)
-    if hb_hour is not None:
-        if _is_summary_hour(hb_hour):
-            logger.info("Sending daily summary (hour %d)", hb_hour)
-            warnings = []
-            pat_warning = _get_pat_expiry_warning()
-            if pat_warning:
-                warnings.append(pat_warning)
-            ok = send_daily_summary(
-                current_value=current_value,
-                threshold=config.ALERT_THRESHOLD,
-                daily_max=state.daily_max_value,
-                daily_max_time=state.daily_max_time,
-                alert_times=state.daily_alert_times,
-                warnings=warnings,
-                fetch_stats=(state.daily_total_fetches, state.daily_failed_fetches),
-            )
-            logger.info("Daily summary notification -> ok=%s", ok)
-        else:
-            last_checked_str = budapest_now.strftime("%H:%M")
-            last_point_ts = points[-1].timestamp
-            if last_point_ts.tzinfo is None:
-                last_point_ts = last_point_ts.replace(tzinfo=timezone.utc)
-            data_time = last_point_ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
-            logger.info("Sending heartbeat (hour %d)", hb_hour)
-            ok = send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str, data_time=data_time, strategy=result.strategy)
-            logger.info("Heartbeat notification -> ok=%s", ok)
-        logger.info("Heartbeat sent for hour %d (actual: %s) | type=%s",
-                     hb_hour, budapest_now.strftime("%H:%M"), "summary" if _is_summary_hour(hb_hour) else "heartbeat")
-        state.heartbeat_sent[str(hb_hour)] = today_str
-
-    logger.info("Run complete | value=%d | daily_max=%d | action=%s | strategy=%s",
-                current_value, state.daily_max_value, action, result.strategy)
-    save(state, state_path)
-
-    return 0
 
 
 if __name__ == "__main__":

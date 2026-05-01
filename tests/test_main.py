@@ -300,21 +300,29 @@ class TestRun:
         assert result == 0
         mock_alert.assert_not_called()
 
-    @patch("src.main.send_fetch_failure_alert")
+    @patch("src.main.send_remediation_report", return_value=True)
+    @patch("src.main.attempt_remediation")
     @patch("src.main.fetch_html", side_effect=Exception("Network error"))
-    def test_run_handles_fetch_failure(self, mock_html, mock_fail_alert, tmp_path):
+    def test_run_handles_fetch_failure(self, mock_html, mock_remediation, mock_rem_report, tmp_path):
+        from src.remediation import ErrorCategory, RemediationResult
+        mock_remediation.return_value = RemediationResult(
+            success=False, error_category=ErrorCategory.UNKNOWN, attempts=[], duration_s=0.0,
+        )
         state_path = tmp_path / "state.json"
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 30
-            mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 3
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.NOTIFICATION_DELAY_MINUTES = 30
+            mock_config.NOTIFICATION_MIN_FAILURES = 2
             mock_config.JITTER_MAX_SECONDS = 0
 
             result = run(str(state_path))
 
         assert result == 0
-        mock_fail_alert.assert_not_called()
+        # First failure: no notification (elapsed=0, failures=1)
+        mock_rem_report.assert_not_called()
 
     def test_run_returns_1_on_config_error(self, tmp_path):
         with patch("src.main.config") as mock_config:
@@ -410,40 +418,68 @@ class TestRun:
 class TestErrorAlerting:
     """Test the 3x consecutive failure -> 1x alert, then silence logic."""
 
-    @patch("src.main.send_fetch_failure_alert", return_value=True)
+    @patch("src.main.send_remediation_report", return_value=True)
+    @patch("src.main.attempt_remediation")
     @patch("src.main.fetch_html", side_effect=Exception("FlareSolverr down"))
-    def test_alert_sent_at_third_failure(self, mock_html, mock_fail_alert, tmp_path):
+    def test_notification_sent_after_delay_and_min_failures(self, mock_html, mock_remediation, mock_rem_report, tmp_path):
+        """Notification fires when elapsed >= 30min AND failures >= 2."""
+        from datetime import timedelta
+        from src.remediation import ErrorCategory, RemediationResult
+        mock_remediation.return_value = RemediationResult(
+            success=False, error_category=ErrorCategory.SOLVER_UNREACHABLE, attempts=[], duration_s=0.0,
+        )
         state_path = tmp_path / "state.json"
-        save(State(consecutive_fetch_failures=2, error_alert_sent=False), state_path)
+        # 1 previous failure, 35 minutes ago
+        first_fail = datetime(2026, 7, 15, 10, 0, 0, tzinfo=timezone.utc)
+        save(State(consecutive_fetch_failures=1, error_alert_sent=False,
+                   first_failure_at=first_fail), state_path)
 
-        with patch("src.main.config") as mock_config:
+        fake_now = datetime(2026, 7, 15, 10, 35, 0, tzinfo=timezone.utc)
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.datetime") as mock_dt:
             mock_config.validate.return_value = []
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 10
-            mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 3
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.NOTIFICATION_DELAY_MINUTES = 30
+            mock_config.NOTIFICATION_MIN_FAILURES = 2
             mock_config.JITTER_MAX_SECONDS = 0
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
             run(str(state_path))
 
-        mock_fail_alert.assert_called_once()
-        assert "FlareSolverr down" in mock_fail_alert.call_args[0][1]
+        mock_rem_report.assert_called_once()
+        loaded = load(state_path)
+        assert loaded.error_alert_sent is True
 
-    @patch("src.main.send_fetch_failure_alert", return_value=True)
+    @patch("src.main.send_remediation_report", return_value=True)
+    @patch("src.main.attempt_remediation")
     @patch("src.main.fetch_html", side_effect=Exception("Still broken"))
-    def test_no_spam_after_alert_sent(self, mock_html, mock_fail_alert, tmp_path):
+    def test_no_spam_after_alert_sent(self, mock_html, mock_remediation, mock_rem_report, tmp_path):
+        from src.remediation import ErrorCategory, RemediationResult
+        mock_remediation.return_value = RemediationResult(
+            success=False, error_category=ErrorCategory.UNKNOWN, attempts=[], duration_s=0.0,
+        )
         state_path = tmp_path / "state.json"
-        save(State(consecutive_fetch_failures=5, error_alert_sent=True), state_path)
+        first_fail = datetime(2026, 7, 15, 9, 0, 0, tzinfo=timezone.utc)
+        # Use 7 (not 5) so after +1 it becomes 8, which is NOT an escalation point (6,12,24)
+        save(State(consecutive_fetch_failures=7, error_alert_sent=True,
+                   first_failure_at=first_fail), state_path)
 
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = []
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 10
-            mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 3
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.NOTIFICATION_DELAY_MINUTES = 30
+            mock_config.NOTIFICATION_MIN_FAILURES = 2
             mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
-        mock_fail_alert.assert_not_called()
+        # Already notified + not an escalation point → no new report
+        mock_rem_report.assert_not_called()
 
     @patch("src.main.send_fetch_recovery", return_value=True)
     @patch("src.main.send_fetch_failure_alert")
@@ -523,9 +559,14 @@ class TestFetchStats:
         assert loaded.daily_total_fetches == 6
         assert loaded.daily_failed_fetches == 1  # unchanged
 
-    @patch("src.main.send_fetch_failure_alert")
+    @patch("src.main.send_remediation_report")
+    @patch("src.main.attempt_remediation")
     @patch("src.main.fetch_html", side_effect=Exception("down"))
-    def test_failure_increments_both(self, mock_html, mock_fail_alert, tmp_path):
+    def test_failure_increments_both(self, mock_html, mock_remediation, mock_rem_report, tmp_path):
+        from src.remediation import ErrorCategory, RemediationResult
+        mock_remediation.return_value = RemediationResult(
+            success=False, error_category=ErrorCategory.UNKNOWN, attempts=[], duration_s=0.0,
+        )
         state_path = tmp_path / "state.json"
         today = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
         save(State(total_fetches=10, failed_fetches=2,
@@ -536,7 +577,9 @@ class TestFetchStats:
             mock_config.validate.return_value = []
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 10
-            mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 99
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.NOTIFICATION_DELAY_MINUTES = 30
+            mock_config.NOTIFICATION_MIN_FAILURES = 99
             mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))

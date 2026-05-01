@@ -22,6 +22,7 @@ mbh-monitor/
 │   ├── notifier.py              # Telegram üzenetküldés
 │   ├── state.py                 # Állapot olvasás/írás
 │   ├── config.py                # Konfiguráció (küszöb, URL, stb.)
+│   ├── remediation.py           # Auto-remediation alternatív fetch stratégiák
 │   └── main.py                  # Belépési pont – ezt hívja a GitHub Actions
 ├── tests/
 │   ├── test_scraper.py
@@ -86,8 +87,8 @@ A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás k
 - A script idempotens, a heartbeat deduplikált (`state.json`) → dupla futás nem okoz dupla értesítést
 - A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2026-07-25** — lejárat előtt rotálni kell.
 
-### 5. Graceful failure + fetch recovery
-Ha a Downdetector nem elérhető / változott a formátum / Cloudflare blokkol, a script **nem buktatja el a GitHub Actions futást** – hanem hibát logol, és ha több egymás utáni futás is elbukik (3+), értesít róla. Amikor a lekérdezés helyreáll, **fetch recovery értesítést** küld (korábbi hibaszám, aktuális érték, stratégia).
+### 5. Graceful failure + azonnali remediation
+Ha a solver nem tudja lekérdezni az adatot, a script **azonnal** alternatív stratégiákkal próbálkozik (auto-remediation). Ha valamelyik sikerül, normál feldolgozás folytatódik. Ha egyik sem → csendben vár, és **~30 perc + 2 hiba** után küld értesítést a részletes diagnosztikával. Amikor a lekérdezés helyreáll, **fetch recovery értesítést** küld.
 
 ### 6. Cloudflare-reziliens scraping (solver-agnosztikus, többrétegű védelem)
 A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt működik. A `_solver_fetch()` mindkét timeout formátumot küldi (`maxTimeout` ms-ben + `max_timeout` másodpercben), így a solver-csere deploy nélkül, GitHub variable-ből megoldható.
@@ -98,7 +99,7 @@ A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt m
 - **Jitter**: 0-90s véletlenszerű várakozás minden futás elején, hogy a lekérdezés ne mindig ugyanabban a pillanatban induljon
 - **Health check**: a retry loop előtt gyors GET a solver-hez – ha nem elérhető, azonnali `FetchError` a 5×60s timeout helyett
 - **Proxy support**: opcionális `FLARESOLVERR_PROXY` env var, ha a GitHub Actions IP blokkolva van
-- **ZenRows fallback**: ha a solver (ByParr/FlareSolverr) összes retry-ja elbukik ÉS `ZENROWS_API_KEY` be van állítva → ZenRows API-n keresztül próbálja (JS rendering + premium proxy, $49/hó). Ha nincs API key, a viselkedés a régi marad.
+- **ZenRows**: a remediation modul kezeli (nem a `fetch_html()`), 4 stratégiával: no-premium (1 kredit), premium HU (10-25 kredit), alt-country (DE/AT/US), direkt HTTP. Kredit figyelmeztetés ha a ZenRows egyenleg `ZENROWS_CREDIT_WARNING_THRESHOLD` alá esik.
 - **Fetch megbízhatóság**: napi (`daily_total_fetches`/`daily_failed_fetches`) és kumulatív (`total_fetches`/`failed_fetches`) számlálók, napi % a napi összefoglalóban
 
 ### 7. Scraping respectful
@@ -137,6 +138,34 @@ Ha az RSC stratégia nem működik és fallback-re kerül a sor, a rendszer:
 - Debug HTML-t ment (`/tmp/debug_response.html`) és feltölti GitHub Actions artifactként
 - A `degraded_parse_alert_sent` state flag megakadályozza a spam-et (RSC visszaállásakor resetelődik)
 
+### 10. Auto-remediation (azonnali javítási kísérlet)
+Ha a solver elbukik, a rendszer **azonnal** alternatív stratégiákkal próbálkozik (nem vár 3-4 hibáig):
+
+```
+except ág:
+  ├─ Minden hiba: AZONNALI REMEDIATION
+  │   ├─ Hiba kategorizálás (CF block / network / rate limit / stb.)
+  │   ├─ Stratégiák (progresszív cooldown-al):
+  │   │   1. ZenRows premium proxy nélkül (1 kredit)
+  │   │   2. ZenRows premium HU proxy-val (10-25 kredit)
+  │   │   3. ZenRows más ország proxy-val (DE/AT/US)
+  │   │   4. Direkt HTTP kérés (solver nélkül, 0 kredit)
+  │   ├─ Ha sikerül → normál feldolgozás + siker riport + kredit figyelmeztetés
+  │   └─ Ha mind bukik → csend, amíg:
+  │       elapsed >= 30 perc AND hibák >= 2 → diagnosztikai riport
+  └─ Eszkaláció: 6., 12., 24. hibánál újra küld riportot
+```
+
+- **Modul**: `src/remediation.py` – `ErrorCategory` enum, `classify_error()`, stratégia függvények, `attempt_remediation()` orchestrator
+- **ZenRows optimalizáció**: a `fetch_html()` csak a solver-t használja, a ZenRows kizárólag remediation stratégia → nincs dupla ZenRows hívás
+- **Hiba kategóriák**: `SOLVER_UNREACHABLE`, `CLOUDFLARE_BLOCK`, `RATE_LIMITED`, `ZENROWS_CREDITS`, `TARGET_DOWN`, `NETWORK_ERROR`, `PARSE_FAILURE`, `UNKNOWN`
+- **Progresszív cooldown**: bukott stratégia `min(30 * fail_count, REMEDIATION_COOLDOWN_MINUTES)` percig nem próbálkozik újra (state-ben: `remediation_attempts`)
+- **Időalapú értesítés**: `NOTIFICATION_DELAY_MINUTES` (30) perc + `NOTIFICATION_MIN_FAILURES` (2) hiba után küld részletes diagnosztikát, nem azonnal
+- **Kredit védelem**: `ZENROWS_CREDIT_WARNING_THRESHOLD` alatti egyenlegnél `send_zenrows_credit_warning()` Telegram üzenet
+- **Spam-védelem**: `error_alert_sent` + `remediation_report_sent` state flag-ek, eszkaláció csak 6/12/24 hibánál
+- **Logolás**: minden stratégia-próbálkozás strukturált logot hagy (`category`, `strategy`, `duration_s`, `result`, `credits`)
+- **Értesítés**: `send_remediation_report()` két variáns (sikeres/sikertelen), `msg_type="remediation_report"`
+
 ## Kulcs parancsok
 
 ```bash
@@ -174,6 +203,11 @@ gh workflow run monitor.yml
 | `ZENROWS_API_KEY` | nem | ZenRows API key a fizetős fallback-hez. Ha üres, nincs ZenRows fallback. |
 | `ZENROWS_PROXY_COUNTRY` | nem | ZenRows proxy ország kód, default `HU`. |
 | `SOLVER_IMAGE` | nem | Docker image a challenge solver-hez (GitHub Actions variable). Default: `ghcr.io/flaresolverr/flaresolverr:latest`. ByParr csere: `ghcr.io/thephaseless/byparr:latest`. |
+| `REMEDIATION_TRIGGER_THRESHOLD` | nem | Hány egymás utáni hiba után indul az auto-remediation, default `1` (azonnali). |
+| `REMEDIATION_COOLDOWN_MINUTES` | nem | Progresszív cooldown felső korlát (percben), default `120`. Tényleges cooldown: `min(30 * fail_count, max)`. |
+| `NOTIFICATION_DELAY_MINUTES` | nem | Mennyi idő elteltével küld értesítést sikertelen remediáció esetén, default `30`. |
+| `NOTIFICATION_MIN_FAILURES` | nem | Minimum hány egymás utáni hiba kell az értesítéshez (az időkorlát mellett), default `2`. |
+| `ZENROWS_CREDIT_WARNING_THRESHOLD` | nem | ZenRows kredit figyelmeztetési küszöb, default `50`. Ha a maradék kredit ez alá esik, Telegram értesítés. |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
 

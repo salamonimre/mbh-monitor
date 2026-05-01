@@ -27,7 +27,7 @@ HTTP_TIMEOUT: int = 60
 MAX_RETRIES: int = int(os.environ.get("MAX_RETRIES", "5"))
 RETRY_BACKOFF_BASE: float = 2.0
 
-CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3
+CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3  # legacy, kept for backward compat
 
 FLARESOLVERR_MAX_TIMEOUT: int = int(os.environ.get("FLARESOLVERR_MAX_TIMEOUT", "60000"))
 FLARESOLVERR_PROXY: str = os.environ.get("FLARESOLVERR_PROXY", "")
@@ -39,6 +39,14 @@ ZENROWS_PROXY_COUNTRY: str = os.environ.get("ZENROWS_PROXY_COUNTRY", "HU")
 
 PAT_EXPIRY_DATE: str = os.environ.get("PAT_EXPIRY_DATE", "2026-07-25")
 PAT_EXPIRY_WARNING_DAYS: int = 30
+
+REMEDIATION_TRIGGER_THRESHOLD: int = int(os.environ.get("REMEDIATION_TRIGGER_THRESHOLD", "1"))
+REMEDIATION_COOLDOWN_MINUTES: int = int(os.environ.get("REMEDIATION_COOLDOWN_MINUTES", "120"))
+
+NOTIFICATION_DELAY_MINUTES: int = int(os.environ.get("NOTIFICATION_DELAY_MINUTES", "30"))
+NOTIFICATION_MIN_FAILURES: int = int(os.environ.get("NOTIFICATION_MIN_FAILURES", "2"))
+
+ZENROWS_CREDIT_WARNING_THRESHOLD: int = int(os.environ.get("ZENROWS_CREDIT_WARNING_THRESHOLD", "50"))
 
 HEARTBEAT_ENABLED: bool = os.environ.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
 HEARTBEAT_HOURS: list[int] = [int(h.strip()) for h in os.environ.get("HEARTBEAT_HOURS", "9,19").split(",")]

@@ -33,17 +33,23 @@ class State:
     # Daily fetch stats (reset at midnight Budapest TZ with other daily stats)
     daily_total_fetches: int = 0
     daily_failed_fetches: int = 0
+    # Remediation tracking
+    remediation_attempts: dict = field(default_factory=dict)  # cooldown tracking per strategy
+    remediation_last_success: str | None = None  # last successful remediation strategy
+    remediation_report_sent: bool = False  # spam prevention for diagnostic reports
+    first_failure_at: datetime | None = None  # timestamp of first failure in current streak
+    zenrows_credits_remaining: int | None = None  # last known ZenRows credit balance
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        for key in ("last_checked", "alert_started_at"):
+        for key in ("last_checked", "alert_started_at", "first_failure_at"):
             val = d[key]
             d[key] = val.isoformat() if isinstance(val, datetime) else val
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> State:
-        for key in ("last_checked", "alert_started_at"):
+        for key in ("last_checked", "alert_started_at", "first_failure_at"):
             val = d.get(key)
             if isinstance(val, str):
                 d[key] = datetime.fromisoformat(val)

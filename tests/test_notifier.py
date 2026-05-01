@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from src import config
-from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, _send_telegram
+from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, send_remediation_report, send_zenrows_credit_warning, _send_telegram
 
 
 class TestSendTelegram:
@@ -127,3 +127,55 @@ class TestAlertMessages:
         assert "helyreállt" in msg.lower() or "Helyreállt" in msg
         assert "rsc" in msg
         assert "0" in msg
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_remediation_report_success(self, mock_send):
+        attempts = [
+            {"strategy": "zenrows_no_premium", "result": "FAILED", "duration_s": 3.2, "error": "HTTP 422"},
+            {"strategy": "direct_request", "result": "SUCCESS", "duration_s": 1.5, "error": None},
+        ]
+        result = send_remediation_report(
+            success=True,
+            error_category="cloudflare_block",
+            consecutive_failures=5,
+            attempts=attempts,
+            strategy_used="direct_request",
+            duration_s=4.7,
+        )
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "sikeres" in msg.lower()
+        assert "direct_request" in msg
+        assert "cloudflare_block" in msg
+        assert "4.7s" in msg
+        assert mock_send.call_args[1]["msg_type"] == "remediation_report"
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_remediation_report_failure(self, mock_send):
+        attempts = [
+            {"strategy": "zenrows_no_premium", "result": "SKIPPED", "duration_s": 0, "error": "cooldown (45min remaining)"},
+            {"strategy": "direct_request", "result": "FAILED", "duration_s": 2.1, "error": "HTTP 403"},
+        ]
+        result = send_remediation_report(
+            success=False,
+            error_category="cloudflare_block",
+            consecutive_failures=6,
+            attempts=attempts,
+            duration_s=2.1,
+        )
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "sikertelen" in msg.lower()
+        assert "cloudflare_block" in msg
+        assert "Tennivaló" in msg
+        assert "6" in msg
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_zenrows_credit_warning(self, mock_send):
+        result = send_zenrows_credit_warning(credits_remaining=23)
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "23" in msg
+        assert "kredit" in msg.lower()
+        assert "Tennivaló" in msg or "Töltsd" in msg
+        assert mock_send.call_args[1]["msg_type"] == "zenrows_credit_warning"
