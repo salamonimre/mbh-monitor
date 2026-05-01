@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import random
 import sys
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -154,6 +156,11 @@ def run(state_path: str | None = None) -> int:
         for err in errors:
             logger.error("Config error: %s", err)
         return 1
+
+    # Random jitter to break predictable timing patterns (Cloudflare evasion)
+    jitter = random.uniform(0, config.JITTER_MAX_SECONDS)
+    logger.info("Jitter delay: %.1fs", jitter)
+    time.sleep(jitter)
 
     state = load(state_path)
     now = datetime.now(timezone.utc)

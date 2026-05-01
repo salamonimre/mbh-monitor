@@ -163,6 +163,8 @@ gh workflow run monitor.yml
 | `HEARTBEAT_HOURS` | nem | Heartbeat órák vesszővel (Budapest TZ), default `9,19`. Az utolsó óra napi összefoglalót küld. |
 | `PAT_EXPIRY_DATE` | nem | cron-job.org PAT lejárati dátum (`YYYY-MM-DD`), default `2026-07-25`. 30 napon belül figyelmeztet a napi összefoglalóban. |
 | `FLARESOLVERR_MAX_TIMEOUT` | nem | FlareSolverr challenge timeout ms-ben, default `60000`. Növeld ha a Cloudflare challenge timeout-ol. |
+| `FLARESOLVERR_PROXY` | nem | Proxy URL a FlareSolverr-nek (pl. `http://user:pass@proxy:8080`). Ha a GitHub Actions IP blokkolva van. |
+| `JITTER_MAX_SECONDS` | nem | Max indulási késleltetés másodpercben, default `90`. Cloudflare timing-detection ellen. |
 
 GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and variables → Actions).
 

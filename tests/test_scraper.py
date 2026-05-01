@@ -153,6 +153,53 @@ class TestSessionManagement:
         with pytest.raises(FetchError, match="empty response"):
             scraper._flaresolverr_fetch("https://example.com")
 
+    @patch("src.scraper.config")
+    @patch("src.scraper.requests.post")
+    def test_flaresolverr_fetch_with_proxy(self, mock_post, mock_config):
+        """Proxy is passed to FlareSolverr when configured."""
+        mock_config.FLARESOLVERR_URL = "http://localhost:8191/v1"
+        mock_config.FLARESOLVERR_MAX_TIMEOUT = 60000
+        mock_config.FLARESOLVERR_PROXY = "http://proxy:8080"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "solution": {
+                "response": "<html>via proxy</html>",
+                "userAgent": "Mozilla/5.0 Test",
+            },
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = scraper._flaresolverr_fetch("https://example.com", session_id="sess-1")
+        assert result.response_html == "<html>via proxy</html>"
+        payload = mock_post.call_args[1]["json"]
+        assert payload["proxy"] == {"url": "http://proxy:8080"}
+
+    @patch("src.scraper.config")
+    @patch("src.scraper.requests.post")
+    def test_flaresolverr_fetch_no_proxy_when_empty(self, mock_post, mock_config):
+        """No proxy param when FLARESOLVERR_PROXY is empty."""
+        mock_config.FLARESOLVERR_URL = "http://localhost:8191/v1"
+        mock_config.FLARESOLVERR_MAX_TIMEOUT = 60000
+        mock_config.FLARESOLVERR_PROXY = ""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "status": "ok",
+            "solution": {
+                "response": "<html>direct</html>",
+                "userAgent": "Mozilla/5.0 Test",
+            },
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = scraper._flaresolverr_fetch("https://example.com")
+        payload = mock_post.call_args[1]["json"]
+        assert "proxy" not in payload
+
 
 class TestFetchHtml:
     @patch("src.scraper._destroy_session")

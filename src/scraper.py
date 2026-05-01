@@ -86,6 +86,8 @@ def _flaresolverr_fetch(url: str, *, session_id: str | None = None) -> _FlareSol
     }
     if session_id:
         payload["session"] = session_id
+    if config.FLARESOLVERR_PROXY:
+        payload["proxy"] = {"url": config.FLARESOLVERR_PROXY}
 
     http_timeout = config.FLARESOLVERR_MAX_TIMEOUT / 1000 + 30
 

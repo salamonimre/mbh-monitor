@@ -246,6 +246,7 @@ class TestRun:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             result = run(str(state_path))
 
@@ -267,6 +268,7 @@ class TestRun:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             result = run(str(state_path))
 
@@ -286,6 +288,7 @@ class TestRun:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             result = run(str(state_path))
 
@@ -301,6 +304,7 @@ class TestRun:
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 30
             mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 3
+            mock_config.JITTER_MAX_SECONDS = 0
 
             result = run(str(state_path))
 
@@ -310,6 +314,7 @@ class TestRun:
     def test_run_returns_1_on_config_error(self, tmp_path):
         with patch("src.main.config") as mock_config:
             mock_config.validate.return_value = ["TELEGRAM_BOT_TOKEN is not set"]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             result = run(str(tmp_path / "state.json"))
 
@@ -329,6 +334,7 @@ class TestRun:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -362,6 +368,7 @@ class TestRun:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
             mock_dt.now.return_value = fake_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
@@ -371,6 +378,28 @@ class TestRun:
         assert loaded.daily_max_value == 15
         assert loaded.daily_max_time == "09:41"
         assert loaded.last_value == 2  # current value is the last point
+
+    @patch("src.main.time.sleep")
+    @patch("src.main.random.uniform", return_value=42.5)
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_jitter_delay_applied(self, mock_html, mock_parse, mock_uniform, mock_sleep, tmp_path):
+        """Jitter delay is applied before fetching."""
+        mock_parse.return_value = _make_result(5)
+        state_path = tmp_path / "state.json"
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 90
+
+            run(str(state_path))
+
+        mock_uniform.assert_called_once_with(0, 90)
+        mock_sleep.assert_called_once_with(42.5)
 
 
 class TestErrorAlerting:
@@ -387,6 +416,7 @@ class TestErrorAlerting:
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 10
             mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 3
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -404,6 +434,7 @@ class TestErrorAlerting:
             mock_config.STATE_FILE = str(state_path)
             mock_config.ALERT_THRESHOLD = 10
             mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 3
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -425,6 +456,7 @@ class TestErrorAlerting:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -449,6 +481,7 @@ class TestErrorAlerting:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -474,6 +507,7 @@ class TestHeartbeatIntegration:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = True
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
             mock_dt.now.return_value = fake_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
@@ -502,6 +536,7 @@ class TestHeartbeatIntegration:
             mock_config.HEARTBEAT_ENABLED = True
             mock_config.HEARTBEAT_HOURS = [9, 19]
             mock_config.PAT_EXPIRY_DATE = ""
+            mock_config.JITTER_MAX_SECONDS = 0
             mock_dt.now.return_value = fake_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
@@ -531,6 +566,7 @@ class TestHeartbeatIntegration:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = True
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
             mock_dt.now.return_value = fake_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
@@ -557,6 +593,7 @@ class TestDegradationDetection:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -579,6 +616,7 @@ class TestDegradationDetection:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
@@ -599,6 +637,7 @@ class TestDegradationDetection:
             mock_config.DOWNDETECTOR_URL = "https://example.com"
             mock_config.HEARTBEAT_ENABLED = False
             mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
 
             run(str(state_path))
 
