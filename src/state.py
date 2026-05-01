@@ -27,6 +27,9 @@ class State:
     daily_max_date: str | None = None  # "YYYY-MM-DD"
     daily_alert_times: list = field(default_factory=list)  # ["HH:MM", ...]
     degraded_parse_alert_sent: bool = False
+    # Fetch reliability counters (cumulative, never reset)
+    total_fetches: int = 0
+    failed_fetches: int = 0
 
     def to_dict(self) -> dict:
         d = asdict(self)

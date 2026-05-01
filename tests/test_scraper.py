@@ -202,10 +202,11 @@ class TestSessionManagement:
 
 
 class TestFetchHtml:
+    @patch("src.scraper._check_flaresolverr_health")
     @patch("src.scraper._destroy_session")
     @patch("src.scraper._flaresolverr_fetch")
     @patch("src.scraper._create_session")
-    def test_fetch_html_success(self, mock_create, mock_fetch, mock_destroy):
+    def test_fetch_html_success(self, mock_create, mock_fetch, mock_destroy, mock_health):
         mock_fetch.return_value = scraper._FlareSolverrResult(
             response_html="<html>ok</html>", user_agent="Mozilla/5.0",
         )
@@ -214,21 +215,24 @@ class TestFetchHtml:
         assert result == "<html>ok</html>"
         mock_create.assert_called_once()
         mock_destroy.assert_called_once()
+        mock_health.assert_called_once()
 
+    @patch("src.scraper._check_flaresolverr_health")
     @patch("src.scraper._destroy_session")
     @patch("src.scraper._flaresolverr_fetch")
     @patch("src.scraper._create_session")
-    def test_fetch_html_flaresolverr_error(self, mock_create, mock_fetch, mock_destroy):
+    def test_fetch_html_flaresolverr_error(self, mock_create, mock_fetch, mock_destroy, mock_health):
         mock_fetch.side_effect = FetchError("Challenge not solved")
 
         with pytest.raises(FetchError, match="Challenge not solved"):
             fetch_html("https://example.com")
 
+    @patch("src.scraper._check_flaresolverr_health")
     @patch("src.scraper._destroy_session")
     @patch("src.scraper._flaresolverr_fetch")
     @patch("src.scraper._create_session")
     @patch("src.scraper.time.sleep")
-    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_create, mock_fetch, mock_destroy):
+    def test_fetch_html_retries_on_connection_error(self, mock_sleep, mock_create, mock_fetch, mock_destroy, mock_health):
         mock_fetch.side_effect = ConnectionError("fail")
 
         with pytest.raises(ConnectionError):
@@ -236,11 +240,12 @@ class TestFetchHtml:
         assert mock_create.call_count == 3  # MAX_RETRIES
         assert mock_destroy.call_count == 3  # Cleanup after each attempt
 
+    @patch("src.scraper._check_flaresolverr_health")
     @patch("src.scraper._destroy_session")
     @patch("src.scraper._flaresolverr_fetch")
     @patch("src.scraper._create_session")
     @patch("src.scraper.time.sleep")
-    def test_session_rotation_uses_unique_ids(self, mock_sleep, mock_create, mock_fetch, mock_destroy):
+    def test_session_rotation_uses_unique_ids(self, mock_sleep, mock_create, mock_fetch, mock_destroy, mock_health):
         """Each retry attempt uses a different session ID."""
         mock_fetch.side_effect = [
             ConnectionError("timeout"),
@@ -258,10 +263,11 @@ class TestFetchHtml:
         assert len(set(session_ids)) == 3
         assert all(sid.startswith("mbh-") for sid in session_ids)
 
+    @patch("src.scraper._check_flaresolverr_health")
     @patch("src.scraper._destroy_session")
     @patch("src.scraper._flaresolverr_fetch")
     @patch("src.scraper._create_session")
-    def test_session_cleanup_on_success(self, mock_create, mock_fetch, mock_destroy):
+    def test_session_cleanup_on_success(self, mock_create, mock_fetch, mock_destroy, mock_health):
         """Session is destroyed even on successful fetch."""
         mock_fetch.return_value = scraper._FlareSolverrResult(
             response_html="<html>ok</html>", user_agent="test",
@@ -272,6 +278,14 @@ class TestFetchHtml:
         created_id = mock_create.call_args[0][0]
         destroyed_id = mock_destroy.call_args[0][0]
         assert created_id == destroyed_id
+
+    @patch("src.scraper.requests.get")
+    def test_health_check_fails_raises_fetch_error(self, mock_get):
+        """FlareSolverr unreachable -> FetchError before any retry."""
+        mock_get.side_effect = ConnectionError("Connection refused")
+
+        with pytest.raises(FetchError, match="FlareSolverr unreachable"):
+            fetch_html("https://example.com")
 
 
 class TestGetCurrentValue:

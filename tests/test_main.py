@@ -488,6 +488,51 @@ class TestErrorAlerting:
         mock_recovery.assert_not_called()
 
 
+class TestFetchStats:
+    """Test total_fetches and failed_fetches counters."""
+
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_success_increments_total(self, mock_html, mock_parse, tmp_path):
+        mock_parse.return_value = _make_result(5)
+        state_path = tmp_path / "state.json"
+        save(State(total_fetches=10, failed_fetches=2), state_path)
+
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+
+            run(str(state_path))
+
+        loaded = load(state_path)
+        assert loaded.total_fetches == 11
+        assert loaded.failed_fetches == 2  # unchanged
+
+    @patch("src.main.send_fetch_failure_alert")
+    @patch("src.main.fetch_html", side_effect=Exception("down"))
+    def test_failure_increments_both(self, mock_html, mock_fail_alert, tmp_path):
+        state_path = tmp_path / "state.json"
+        save(State(total_fetches=10, failed_fetches=2), state_path)
+
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 99
+            mock_config.JITTER_MAX_SECONDS = 0
+
+            run(str(state_path))
+
+        loaded = load(state_path)
+        assert loaded.total_fetches == 11
+        assert loaded.failed_fetches == 3
+
+
 class TestHeartbeatIntegration:
     """Test heartbeat and daily summary within the full run flow."""
 

@@ -116,9 +116,14 @@ def send_daily_summary(
     daily_max_time: str | None,
     alert_times: list[str],
     warnings: list[str] | None = None,
+    fetch_stats: tuple[int, int] | None = None,
     **kwargs,
 ) -> bool:
-    """Send end-of-day summary with daily max, alerts, and current state."""
+    """Send end-of-day summary with daily max, alerts, and current state.
+
+    Args:
+        fetch_stats: Optional (total_fetches, failed_fetches) tuple for reliability display.
+    """
     alert_section = ""
     if alert_times:
         times_str = ", ".join(alert_times)
@@ -127,6 +132,12 @@ def send_daily_summary(
         alert_section = "Riasztás volt: nem\n"
 
     max_time_str = f" ({daily_max_time})" if daily_max_time else ""
+
+    reliability_section = ""
+    if fetch_stats and fetch_stats[0] > 0:
+        total, failed = fetch_stats
+        success_rate = ((total - failed) / total) * 100
+        reliability_section = f"Megbízhatóság: {success_rate:.0f}% ({total - failed}/{total} sikeres)\n"
 
     warning_section = ""
     if warnings:
@@ -138,6 +149,7 @@ def send_daily_summary(
         f"Aktuális: <b>{current_value}</b>\n"
         f"Küszöb: {threshold}\n"
         f"{alert_section}"
+        f"{reliability_section}"
         f"{warning_section}\n"
         f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
     )

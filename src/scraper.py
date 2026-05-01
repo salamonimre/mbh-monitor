@@ -110,6 +110,16 @@ def _flaresolverr_fetch(url: str, *, session_id: str | None = None) -> _FlareSol
     return _FlareSolverrResult(response_html=response_html, user_agent=user_agent)
 
 
+def _check_flaresolverr_health() -> None:
+    """Quick health check – fail fast if FlareSolverr is unreachable."""
+    try:
+        resp = requests.get(config.FLARESOLVERR_URL, timeout=5)
+        resp.raise_for_status()
+        logger.info("FlareSolverr health check OK")
+    except Exception as exc:
+        raise FetchError(f"FlareSolverr unreachable at {config.FLARESOLVERR_URL}: {exc}") from exc
+
+
 def fetch_html(url: str, *, timeout: int | None = None) -> str:
     """Fetch HTML via FlareSolverr with session rotation.
 
@@ -117,6 +127,8 @@ def fetch_html(url: str, *, timeout: int | None = None) -> str:
     to avoid Cloudflare fingerprint-based blocking. Sessions are always
     cleaned up in the finally block.
     """
+    _check_flaresolverr_health()
+
     last_exc: Exception | None = None
 
     for attempt in range(config.MAX_RETRIES):
