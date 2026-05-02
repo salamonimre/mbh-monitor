@@ -78,7 +78,9 @@ A Downdetector bármikor átalakíthatja a HTML-t. A parser legyen:
 - `send_heartbeat(current_value, threshold, last_checked, *, data_time) -> bool` — msg_type="heartbeat"
 - `send_daily_summary(current_value, threshold, daily_max, ...) -> bool` — msg_type="daily_summary"
 - `send_parse_degradation_alert(strategy, current_value) -> bool` — msg_type="parse_degradation"
-- `send_fetch_failure_alert(failures, error) -> bool` — msg_type="fetch_failure"
+- `send_remediation_report(success, error_category, ...) -> bool` — msg_type="remediation_report"
+- `send_zenrows_credit_warning(credits_remaining) -> bool` — msg_type="zenrows_credit_warning"
+- `send_fetch_recovery(previous_failures, current_value, strategy) -> bool` — msg_type="fetch_recovery"
 - Telegram API hívás, timeout, retry
 - Message formatting (emoji, timestamp, link az oldalra)
 

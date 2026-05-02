@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from src import config
-from src.notifier import send_alert, send_recovery, send_fetch_failure_alert, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, send_remediation_report, send_zenrows_credit_warning, _send_telegram
+from src.notifier import send_alert, send_recovery, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, send_remediation_report, send_zenrows_credit_warning, _send_telegram
 
 
 class TestSendTelegram:
@@ -54,14 +54,6 @@ class TestAlertMessages:
         msg = mock_send.call_args[0][0]
         assert "15" in msg
         assert "Helyreállás" in msg or "helyreáll" in msg.lower()
-
-    @patch("src.notifier._send_telegram", return_value=True)
-    def test_send_fetch_failure_alert(self, mock_send):
-        result = send_fetch_failure_alert(3, "TimeoutError")
-        assert result is True
-        msg = mock_send.call_args[0][0]
-        assert "3" in msg
-        assert "TimeoutError" in msg
 
     @patch("src.notifier._send_telegram", return_value=True)
     def test_send_heartbeat(self, mock_send):

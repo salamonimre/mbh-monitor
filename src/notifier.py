@@ -171,19 +171,6 @@ def send_parse_degradation_alert(strategy: str, current_value: int, **kwargs) ->
     return _send_telegram(message, msg_type="parse_degradation", **kwargs)
 
 
-def send_fetch_failure_alert(failures: int, error: str, **kwargs) -> bool:
-    """Alert about consecutive fetch failures."""
-    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
-    message = (
-        f"⚠️ <b>MBH Monitor – Scraping hiba</b>\n\n"
-        f"Egymás utáni sikertelen lekérdezések: <b>{failures}</b>\n"
-        f"Utolsó hiba: <code>{error[:200]}</code>\n"
-        f"Időpont: {now}\n\n"
-        f"A monitor nem tud adatot lekérdezni. Ellenőrizd a logokat."
-    )
-    return _send_telegram(message, msg_type="fetch_failure", **kwargs)
-
-
 def send_remediation_report(
     success: bool,
     error_category: str,
