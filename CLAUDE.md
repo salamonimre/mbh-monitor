@@ -100,7 +100,7 @@ A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt m
 - **Health check**: a retry loop előtt gyors GET a solver-hez – ha nem elérhető, azonnali `FetchError` a 5×60s timeout helyett
 - **Proxy support**: opcionális `FLARESOLVERR_PROXY` env var, ha a GitHub Actions IP blokkolva van
 - **ZenRows**: a remediation modul kezeli (nem a `fetch_html()`), 4 stratégiával: no-premium (1 kredit), premium HU (10-25 kredit), alt-country (DE/AT/US), direkt HTTP. Kredit figyelmeztetés ha a ZenRows egyenleg `ZENROWS_CREDIT_WARNING_THRESHOLD` alá esik.
-- **Fetch megbízhatóság**: napi (`daily_total_fetches`/`daily_failed_fetches`) és kumulatív (`total_fetches`/`failed_fetches`) számlálók, napi % a napi összefoglalóban
+- **Napi SLA szint**: napi (`daily_total_fetches`/`daily_failed_fetches`) és kumulatív (`total_fetches`/`failed_fetches`) számlálók, napi SLA % a napi összefoglalóban
 
 ### 7. Scraping respectful
 - User-Agent reális (FlareSolverr Chrome)
