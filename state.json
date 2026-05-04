@@ -1,6 +1,6 @@
 {
-  "last_value": 7,
-  "last_checked": "2026-05-04T17:02:26.694107+00:00",
+  "last_value": 5,
+  "last_checked": "2026-05-04T17:32:05.845119+00:00",
   "alert_active": false,
   "alert_started_at": null,
   "consecutive_fetch_failures": 0,
@@ -19,9 +19,9 @@
     "16:36"
   ],
   "degraded_parse_alert_sent": false,
-  "total_fetches": 210,
+  "total_fetches": 211,
   "failed_fetches": 14,
-  "daily_total_fetches": 43,
+  "daily_total_fetches": 44,
   "daily_failed_fetches": 0,
   "remediation_attempts": {},
   "remediation_last_success": null,
