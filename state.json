@@ -1,6 +1,6 @@
 {
-  "last_value": 1,
-  "last_checked": "2026-06-08T11:32:58.534078+00:00",
+  "last_value": 3,
+  "last_checked": "2026-06-08T11:35:57.638519+00:00",
   "alert_active": false,
   "alert_started_at": null,
   "consecutive_fetch_failures": 0,
