@@ -72,6 +72,8 @@ A `main.py` minden indításnál ugyanazt csinálja: lekér, összehasonlít, é
 ### 2. Duplikáció-mentes riasztás
 Csak akkor küld riasztást, amikor **eléri vagy átlépi** a küszöböt (előző érték < küszöb, új >= küszöb). Helyreállás: amikor visszaesik a küszöb alá (új < küszöb). Ezt a `state.json` biztosítja.
 
+**Visszamenőleges spike detektálás**: Ha a chart adatpontok között (az utolsó `last_checked` óta) bármelyik átlépte a küszöböt, de a jelenlegi érték már alatta van, a rendszer `send_retroactive_alert()` üzenetet küld. Ez a `_detect_retroactive_spike()` függvény feladata. Az `alert_active` nem változik (nem kell recovery ciklus), és a napi összefoglalóban `*` jellel jelölt időpont jelzi a visszamenőleges riasztást.
+
 ### 3. Heartbeat & napi összefoglaló (catchup logika)
 A `HEARTBEAT_HOURS` env var-ban megadott óráknál (Budapest TZ) küld üzenetet:
 - **Korábbi órák** (pl. 9): egyszerű heartbeat (aktuális hibaszám, küszöb)
@@ -114,7 +116,7 @@ Minden futás teljes log-trace-t hagy a GitHub Actions logban, amiből visszaál
 - **Daily max updated**: mikor/miért változik a napi csúcs
 - **No action needed / ALERT / RECOVERY**: döntés indoklása (value, threshold, alert_active)
 - **Telegram eredmény**: minden send hívás után `-> ok=True/False`
-- **Üzenettípus**: a `_send_telegram` `msg_type` keyword-only paraméterrel logol (`alert`, `recovery`, `heartbeat`, `daily_summary`, `parse_degradation`, `fetch_failure`, `fetch_recovery`)
+- **Üzenettípus**: a `_send_telegram` `msg_type` keyword-only paraméterrel logol (`alert`, `recovery`, `retroactive_alert`, `heartbeat`, `daily_summary`, `parse_degradation`, `fetch_failure`, `fetch_recovery`)
 - **Heartbeat catchup**: tényleges küldési idő (`actual: HH:MM`) és típus (heartbeat/summary)
 - **Recent points**: RSC parse után az utolsó 5 adatpont (`value@HH:MM` formátum)
 - **State loaded**: betöltéskori állapot összefoglaló

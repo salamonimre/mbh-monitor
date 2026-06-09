@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from src import config
-from src.notifier import send_alert, send_recovery, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, send_remediation_report, send_zenrows_credit_warning, _send_telegram
+from src.notifier import send_alert, send_recovery, send_retroactive_alert, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, send_remediation_report, send_zenrows_credit_warning, _send_telegram
 
 
 class TestSendTelegram:
@@ -170,3 +170,17 @@ class TestAlertMessages:
         assert "kredit" in msg.lower()
         assert "Tennivaló" in msg or "Töltsd" in msg
         assert mock_send.call_args[1]["msg_type"] == "zenrows_credit_warning"
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_retroactive_alert(self, mock_send):
+        result = send_retroactive_alert(
+            spike_value=13, spike_time="14:40", current_value=7, threshold=10,
+        )
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "13" in msg
+        assert "14:40" in msg
+        assert "7" in msg
+        assert "10" in msg
+        assert "Visszamen" in msg
+        assert mock_send.call_args[1]["msg_type"] == "retroactive_alert"

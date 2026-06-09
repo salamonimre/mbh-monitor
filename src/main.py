@@ -18,6 +18,7 @@ from src.notifier import (
     send_parse_degradation_alert,
     send_recovery,
     send_remediation_report,
+    send_retroactive_alert,
     send_zenrows_credit_warning,
 )
 from pathlib import Path
@@ -66,6 +67,49 @@ def decide_action(state: State, current_value: int, threshold: int) -> str:
     if not is_above and was_above:
         return "recovery"
     return "none"
+
+
+def _detect_retroactive_spike(
+    points: list[ReportPoint],
+    last_checked: datetime | None,
+    threshold: int,
+    alert_active: bool,
+    current_value: int,
+) -> tuple[int, str] | None:
+    """Detect if any data point since last_checked crossed the threshold.
+
+    Returns (spike_value, spike_time_HH:MM_Budapest) if a retroactive spike
+    is found, or None otherwise.
+
+    Skips detection when:
+    - alert_active is True (normal alert cycle handles it)
+    - current_value >= threshold (normal alert handles it)
+    """
+    if alert_active or current_value >= threshold:
+        return None
+
+    best_value = 0
+    best_time: str | None = None
+
+    for p in points:
+        # Filter to points after last_checked (if set)
+        if last_checked is not None:
+            ts = p.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts <= last_checked:
+                continue
+
+        if p.value >= threshold and p.value > best_value:
+            best_value = p.value
+            ts = p.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            best_time = ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
+
+    if best_value >= threshold and best_time is not None:
+        return best_value, best_time
+    return None
 
 
 def _reset_daily_stats_if_needed(state: State, today_str: str) -> None:
@@ -234,6 +278,20 @@ def _process_successful_fetch(
     else:
         logger.info("No action needed (value=%d, threshold=%d, alert_active=%s)",
                      current_value, config.ALERT_THRESHOLD, state.alert_active)
+
+        # Retroactive spike detection: check if any point since last check crossed threshold
+        spike = _detect_retroactive_spike(
+            points, state.last_checked, config.ALERT_THRESHOLD,
+            state.alert_active, current_value,
+        )
+        if spike is not None:
+            spike_value, spike_time = spike
+            logger.info("RETROACTIVE SPIKE detected: %d at %s (current=%d, threshold=%d)",
+                        spike_value, spike_time, current_value, config.ALERT_THRESHOLD)
+            ok = send_retroactive_alert(spike_value, spike_time, current_value, config.ALERT_THRESHOLD)
+            logger.info("Retroactive alert notification -> ok=%s", ok)
+            state.daily_alert_times.append(f"{spike_time}*")
+            action = "retroactive_alert"
 
     # Update state
     state.last_value = current_value

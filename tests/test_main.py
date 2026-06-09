@@ -12,6 +12,7 @@ import pytest
 from src.main import (
     decide_action,
     run,
+    _detect_retroactive_spike,
     _get_heartbeat_hour,
     _is_summary_hour,
     _reset_daily_stats_if_needed,
@@ -745,3 +746,173 @@ class TestDegradationDetection:
         mock_degrad.assert_not_called()
         loaded = load(state_path)
         assert loaded.degraded_parse_alert_sent is False
+
+
+class TestDetectRetroactiveSpike:
+    """Test retroactive spike detection from chart data points."""
+
+    def test_spike_after_last_checked(self):
+        """Spike after last_checked should be detected."""
+        last_checked = datetime(2026, 6, 8, 10, 0, 0, tzinfo=timezone.utc)
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=timezone.utc), 6),
+            ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=timezone.utc), 4),
+            ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=timezone.utc), 13),  # spike
+            ReportPoint(datetime(2026, 6, 8, 10, 55, tzinfo=timezone.utc), 6),
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 7),  # current
+        ]
+        result = _detect_retroactive_spike(points, last_checked, 10, False, 7)
+        assert result is not None
+        assert result[0] == 13
+        assert result[1] == "12:40"  # Budapest = UTC+2
+
+    def test_all_below_threshold(self):
+        """No spike when all points are below threshold."""
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 3),
+            ReportPoint(datetime(2026, 6, 8, 11, 25, tzinfo=timezone.utc), 5),
+            ReportPoint(datetime(2026, 6, 8, 11, 40, tzinfo=timezone.utc), 7),
+        ]
+        result = _detect_retroactive_spike(points, last_checked, 10, False, 7)
+        assert result is None
+
+    def test_alert_active_skips(self):
+        """When alert is active, normal cycle handles it."""
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 15),
+        ]
+        result = _detect_retroactive_spike(points, last_checked, 10, True, 7)
+        assert result is None
+
+    def test_current_above_threshold_skips(self):
+        """When current value >= threshold, normal alert handles it."""
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 15),
+        ]
+        result = _detect_retroactive_spike(points, last_checked, 10, False, 12)
+        assert result is None
+
+    def test_spike_before_last_checked_ignored(self):
+        """Points at or before last_checked are already seen."""
+        last_checked = datetime(2026, 6, 8, 12, 0, 0, tzinfo=timezone.utc)
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 11, 30, tzinfo=timezone.utc), 15),  # before
+            ReportPoint(datetime(2026, 6, 8, 12, 0, 0, tzinfo=timezone.utc), 12),  # at last_checked
+            ReportPoint(datetime(2026, 6, 8, 12, 15, tzinfo=timezone.utc), 5),  # after, but below
+        ]
+        result = _detect_retroactive_spike(points, last_checked, 10, False, 5)
+        assert result is None
+
+    def test_last_checked_none_checks_all(self):
+        """First run (last_checked=None) should consider all points."""
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 10, 0, tzinfo=timezone.utc), 3),
+            ReportPoint(datetime(2026, 6, 8, 10, 15, tzinfo=timezone.utc), 14),  # spike
+            ReportPoint(datetime(2026, 6, 8, 10, 30, tzinfo=timezone.utc), 5),
+        ]
+        result = _detect_retroactive_spike(points, None, 10, False, 5)
+        assert result is not None
+        assert result[0] == 14
+
+    def test_multiple_spikes_returns_highest(self):
+        """When multiple points cross threshold, return the highest."""
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        points = [
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 12),
+            ReportPoint(datetime(2026, 6, 8, 11, 25, tzinfo=timezone.utc), 18),  # highest
+            ReportPoint(datetime(2026, 6, 8, 11, 40, tzinfo=timezone.utc), 11),
+            ReportPoint(datetime(2026, 6, 8, 11, 55, tzinfo=timezone.utc), 7),
+        ]
+        result = _detect_retroactive_spike(points, last_checked, 10, False, 7)
+        assert result is not None
+        assert result[0] == 18
+        assert result[1] == "13:25"  # Budapest = UTC+2
+
+
+class TestRetroactiveAlertIntegration:
+    """Integration tests for retroactive spike detection within the full run flow."""
+
+    @patch("src.main.send_retroactive_alert", return_value=True)
+    @patch("src.main.send_alert")
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_chart_spike_current_below_triggers_retroactive(
+        self, mock_html, mock_parse, mock_alert, mock_retro, tmp_path,
+    ):
+        """Spike in chart + current below threshold → retroactive alert, alert_active stays False."""
+        # Chart: spike at 12:40 UTC (14:40 Budapest), current=7
+        mock_parse.return_value = ParseResult(
+            points=[
+                ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=timezone.utc), 6),
+                ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=timezone.utc), 4),
+                ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=timezone.utc), 13),
+                ReportPoint(datetime(2026, 6, 8, 10, 55, tzinfo=timezone.utc), 6),
+                ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 7),
+            ],
+            strategy="rsc",
+        )
+        state_path = tmp_path / "state.json"
+        # last_checked before the spike
+        save(State(last_checked=datetime(2026, 6, 8, 10, 0, 0, tzinfo=timezone.utc)), state_path)
+
+        fake_now = datetime(2026, 6, 8, 11, 30, 0, tzinfo=timezone.utc)
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.datetime") as mock_dt:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = run(str(state_path))
+
+        assert result == 0
+        mock_retro.assert_called_once_with(13, "12:40", 7, 10)
+        mock_alert.assert_not_called()
+        loaded = load(state_path)
+        assert loaded.alert_active is False
+        assert any("*" in t for t in loaded.daily_alert_times)
+
+    @patch("src.main.send_retroactive_alert")
+    @patch("src.main.send_alert", return_value=True)
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_current_above_threshold_normal_alert_not_retroactive(
+        self, mock_html, mock_parse, mock_alert, mock_retro, tmp_path,
+    ):
+        """Current value above threshold → normal alert, no retroactive."""
+        mock_parse.return_value = ParseResult(
+            points=[
+                ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=timezone.utc), 6),
+                ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=timezone.utc), 15),
+                ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=timezone.utc), 12),
+            ],
+            strategy="rsc",
+        )
+        state_path = tmp_path / "state.json"
+
+        fake_now = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.datetime") as mock_dt:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = run(str(state_path))
+
+        assert result == 0
+        mock_alert.assert_called_once_with(12, 10)
+        mock_retro.assert_not_called()

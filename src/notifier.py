@@ -69,6 +69,28 @@ def send_alert(current_value: int, threshold: int, **kwargs) -> bool:
     return _send_telegram(message, msg_type="alert", **kwargs)
 
 
+def send_retroactive_alert(
+    spike_value: int,
+    spike_time: str,
+    current_value: int,
+    threshold: int,
+    **kwargs,
+) -> bool:
+    """Send retroactive alert when a between-checks spike crossed the threshold."""
+    now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
+    message = (
+        f"⚡ <b>MBH Bank – Visszamenőleges riasztás</b>\n\n"
+        f"A két lekérdezés között csúcsérték lépte át a küszöböt.\n\n"
+        f"Csúcsérték: <b>{spike_value}</b> ({spike_time})\n"
+        f"Aktuális érték: <b>{current_value}</b>\n"
+        f"Küszöb: {threshold}\n\n"
+        f"A csúcsérték már a küszöb alá esett, nincs aktív riasztás.\n"
+        f"Észlelés ideje: {now}\n\n"
+        f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
+    )
+    return _send_telegram(message, msg_type="retroactive_alert", **kwargs)
+
+
 def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
     """Send recovery notification."""
     now = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d %H:%M")
