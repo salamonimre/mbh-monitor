@@ -57,13 +57,16 @@ class TestAlertMessages:
 
     @patch("src.notifier._send_telegram", return_value=True)
     def test_send_heartbeat(self, mock_send):
-        result = send_heartbeat(5, 10, "09:15", data_time="08:51")
+        result = send_heartbeat(5, 10, "09:15", data_time="08:51", data_delay_minutes=24)
         assert result is True
         msg = mock_send.call_args[0][0]
         assert "5" in msg
         assert "10" in msg
         assert "09:15" in msg
         assert "08:51" in msg
+        assert "24 perc késleltetés" in msg
+        assert "Ellenőrzés ideje" in msg
+        assert "Downdetector legfrissebb adata" in msg
         assert "heartbeat" in msg.lower()
 
     @patch("src.notifier._send_telegram", return_value=True)
@@ -72,7 +75,7 @@ class TestAlertMessages:
         assert result is True
         msg = mock_send.call_args[0][0]
         assert "5" in msg
-        assert "adat" not in msg
+        assert "Downdetector" not in msg
 
     @patch("src.notifier._send_telegram", return_value=True)
     def test_send_daily_summary_with_alerts(self, mock_send):

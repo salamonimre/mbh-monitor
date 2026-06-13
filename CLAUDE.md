@@ -140,6 +140,8 @@ Ha az RSC stratégia nem működik és fallback-re kerül a sor, a rendszer:
 - Debug HTML-t ment (`/tmp/debug_response.html`) és feltölti GitHub Actions artifactként
 - A `degraded_parse_alert_sent` state flag megakadályozza a spam-et (RSC visszaállásakor resetelődik)
 
+**Skeleton page detektálás és automatikus re-fetch**: Ha a `parse_reports()` a `heading` stratégiára esik vissza (ami csak "no current problems" → 0-t tud jelezni, chart adat nélkül), a `run()` automatikusan meghívja az `attempt_remediation()`-t alternatív forrásból (ZenRows, direkt HTTP) a valódi chart adatokért. Ha a remediation jobb stratégiát ad (nem heading) → azt használja (`via_remediation` jelöléssel). Ha a remediation is heading-et ad → az eredeti eredménnyel folytatja (+ degradáció alert). A skeleton HTML debug-ként mentésre kerül.
+
 ### 10. Auto-remediation (azonnali javítási kísérlet)
 Ha a solver elbukik, a rendszer **azonnal** alternatív stratégiákkal próbálkozik (nem vár 3-4 hibáig):
 

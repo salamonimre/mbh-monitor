@@ -317,13 +317,16 @@ def _process_successful_fetch(
             )
             logger.info("Daily summary notification -> ok=%s", ok)
         else:
-            last_checked_str = budapest_now.strftime("%H:%M")
+            check_time_str = budapest_now.strftime("%H:%M")
             last_point_ts = points[-1].timestamp
             if last_point_ts.tzinfo is None:
                 last_point_ts = last_point_ts.replace(tzinfo=timezone.utc)
             data_time = last_point_ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
+            data_delay_minutes = int((now - last_point_ts).total_seconds() / 60)
             logger.info("Sending heartbeat (hour %d)", hb_hour)
-            ok = send_heartbeat(current_value, config.ALERT_THRESHOLD, last_checked_str, data_time=data_time, strategy=result.strategy)
+            ok = send_heartbeat(current_value, config.ALERT_THRESHOLD, check_time_str,
+                                data_time=data_time, data_delay_minutes=data_delay_minutes,
+                                strategy=result.strategy)
             logger.info("Heartbeat notification -> ok=%s", ok)
         logger.info("Heartbeat sent for hour %d (actual: %s) | type=%s",
                      hb_hour, budapest_now.strftime("%H:%M"), "summary" if _is_summary_hour(hb_hour) else "heartbeat")
@@ -372,6 +375,27 @@ def run(state_path: str | None = None) -> int:
     try:
         html = fetch_html(config.DOWNDETECTOR_URL)
         result = parse_reports(html)
+
+        # Skeleton page: heading-only = no chart data, try re-fetch
+        if result.strategy == "heading":
+            logger.warning("Skeleton page detected (heading strategy), attempting re-fetch")
+            _save_debug_html(html)
+            rem_result = attempt_remediation(
+                config.DOWNDETECTOR_URL,
+                ParseError("Skeleton page: no chart data in HTML"),
+                state,
+            )
+            if (rem_result.success and rem_result.parse_result
+                    and rem_result.parse_result.strategy != "heading"
+                    and rem_result.html):
+                logger.info("Skeleton re-fetch improved: heading -> %s (via %s)",
+                            rem_result.parse_result.strategy, rem_result.strategy_used)
+                return _process_successful_fetch(
+                    rem_result.parse_result, rem_result.html, state, now,
+                    budapest_now, today_str, state_path,
+                    via_remediation=rem_result.strategy_used,
+                )
+            logger.warning("Skeleton re-fetch failed, proceeding with heading result")
 
         return _process_successful_fetch(
             result, html, state, now, budapest_now, today_str, state_path,

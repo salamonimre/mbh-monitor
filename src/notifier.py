@@ -107,26 +107,31 @@ def send_recovery(current_value: int, threshold: int, **kwargs) -> bool:
 def send_heartbeat(
     current_value: int,
     threshold: int,
-    last_checked: str,
+    check_time: str,
     *,
     data_time: str | None = None,
+    data_delay_minutes: int | None = None,
     strategy: str | None = None,
     **kwargs,
 ) -> bool:
     """Send daily heartbeat status message."""
-    value_str = f"<b>{current_value}</b>"
-    if data_time:
-        value_str += f" ({data_time}-es adat)"
     if strategy and strategy != "rsc":
         status_line = f"Lekérdezés: fallback parser (<code>{strategy}</code>)"
     else:
         status_line = "Lekérdezés: rendben"
+
+    data_line = ""
+    if data_time:
+        delay_str = f" ({data_delay_minutes} perc késleltetés)" if data_delay_minutes is not None else ""
+        data_line = f"Downdetector legfrissebb adata: {data_time}{delay_str}\n"
+
     message = (
         f"<b>MBH Monitor heartbeat</b>\n\n"
-        f"Aktuális reports: {value_str}\n"
+        f"Aktuális reports: <b>{current_value}</b>\n"
         f"Küszöb: {threshold}\n"
         f"{status_line}\n"
-        f"Utolsó ellenőrzés: {last_checked}"
+        f"Ellenőrzés ideje: {check_time}\n"
+        f"{data_line}"
     )
     return _send_telegram(message, msg_type="heartbeat", **kwargs)
 

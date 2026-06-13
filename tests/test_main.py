@@ -916,3 +916,125 @@ class TestRetroactiveAlertIntegration:
         assert result == 0
         mock_alert.assert_called_once_with(12, 10)
         mock_retro.assert_not_called()
+
+
+class TestSkeletonRefetch:
+    """Test skeleton page detection and automatic re-fetch via remediation."""
+
+    @patch("src.main.attempt_remediation")
+    @patch("src.main._save_debug_html")
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>skeleton</html>")
+    def test_skeleton_triggers_remediation(
+        self, mock_html, mock_parse, mock_save_debug, mock_remediation, tmp_path,
+    ):
+        """Heading-only result triggers attempt_remediation with ParseError."""
+        from src.remediation import ErrorCategory, RemediationResult
+        mock_parse.return_value = _make_result(0, strategy="heading")
+        mock_remediation.return_value = RemediationResult(
+            success=False, error_category=ErrorCategory.PARSE_FAILURE,
+            attempts=[], duration_s=0.0,
+        )
+        state_path = tmp_path / "state.json"
+
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+
+            result = run(str(state_path))
+
+        assert result == 0
+        mock_remediation.assert_called_once()
+        # Verify it was called with a ParseError about skeleton
+        call_args = mock_remediation.call_args
+        assert isinstance(call_args[0][1], Exception)
+        assert "Skeleton" in str(call_args[0][1])
+        # Called in skeleton detection + degradation handler in _process_successful_fetch
+        mock_save_debug.assert_any_call("<html>skeleton</html>")
+
+    @patch("src.main.send_parse_degradation_alert")
+    @patch("src.main.attempt_remediation")
+    @patch("src.main._save_debug_html")
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>skeleton</html>")
+    def test_skeleton_remediation_improves_to_rsc(
+        self, mock_html, mock_parse, mock_save_debug, mock_remediation,
+        mock_degrad, tmp_path,
+    ):
+        """Remediation returns RSC result -> uses that instead of heading."""
+        from src.remediation import ErrorCategory, RemediationResult
+        rsc_result = _make_result(5, strategy="rsc")
+        mock_parse.return_value = _make_result(0, strategy="heading")
+        mock_remediation.return_value = RemediationResult(
+            success=True,
+            html="<html>full rsc page</html>",
+            parse_result=rsc_result,
+            strategy_used="zenrows_no_premium",
+            error_category=ErrorCategory.PARSE_FAILURE,
+            attempts=[], duration_s=1.5,
+        )
+        state_path = tmp_path / "state.json"
+
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+
+            result = run(str(state_path))
+
+        assert result == 0
+        loaded = load(state_path)
+        assert loaded.last_value == 5
+        # RSC strategy resets degradation flag
+        assert loaded.degraded_parse_alert_sent is False
+        mock_degrad.assert_not_called()
+
+    @patch("src.main.send_parse_degradation_alert", return_value=True)
+    @patch("src.main.attempt_remediation")
+    @patch("src.main._save_debug_html")
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>skeleton</html>")
+    def test_skeleton_remediation_still_heading_falls_through(
+        self, mock_html, mock_parse, mock_save_debug, mock_remediation,
+        mock_degrad, tmp_path,
+    ):
+        """Remediation also returns heading -> falls through to original, degradation alert sent."""
+        from src.remediation import ErrorCategory, RemediationResult
+        heading_result = _make_result(0, strategy="heading")
+        mock_parse.return_value = _make_result(0, strategy="heading")
+        mock_remediation.return_value = RemediationResult(
+            success=True,
+            html="<html>still skeleton</html>",
+            parse_result=heading_result,
+            strategy_used="direct_request",
+            error_category=ErrorCategory.PARSE_FAILURE,
+            attempts=[], duration_s=0.5,
+        )
+        state_path = tmp_path / "state.json"
+
+        with patch("src.main.config") as mock_config:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+
+            result = run(str(state_path))
+
+        assert result == 0
+        loaded = load(state_path)
+        assert loaded.last_value == 0
+        # Falls through to original heading result -> degradation alert
+        mock_degrad.assert_called_once_with("heading", 0)
+        assert loaded.degraded_parse_alert_sent is True
