@@ -48,6 +48,9 @@ NOTIFICATION_MIN_FAILURES: int = int(os.environ.get("NOTIFICATION_MIN_FAILURES",
 
 ZENROWS_CREDIT_WARNING_THRESHOLD: int = int(os.environ.get("ZENROWS_CREDIT_WARNING_THRESHOLD", "50"))
 
+HISTORY_FILE: str = os.environ.get("HISTORY_FILE", "history.csv")
+HISTORY_MAX_SIZE_MB: int = int(os.environ.get("HISTORY_MAX_SIZE_MB", "5"))
+
 HEARTBEAT_ENABLED: bool = os.environ.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes")
 HEARTBEAT_HOURS: list[int] = [int(h.strip()) for h in os.environ.get("HEARTBEAT_HOURS", "9,19").split(",")]
 

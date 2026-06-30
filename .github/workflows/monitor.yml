@@ -72,9 +72,11 @@ jobs:
 
           # Save our state before any git operations
           cp state.json /tmp/state_backup.json
+          [ -f history.csv ] && cp history.csv /tmp/history_backup.csv
 
           # Initial commit of local changes
           git add state.json
+          [ -f history.csv ] && git add history.csv
           git diff --cached --quiet && { echo "No state changes to commit"; exit 0; }
           git commit -m "chore: update state [skip ci]"
 
@@ -99,7 +101,9 @@ jobs:
             # Reset to remote, then re-apply our state on top
             git reset --hard origin/main
             cp /tmp/state_backup.json state.json
+            [ -f /tmp/history_backup.csv ] && cp /tmp/history_backup.csv history.csv
             git add state.json
+            [ -f history.csv ] && git add history.csv
             git diff --cached --quiet && { echo "State unchanged after reset, nothing to push"; exit 0; }
             git commit -m "chore: update state [skip ci]"
           done

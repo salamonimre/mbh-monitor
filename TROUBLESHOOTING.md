@@ -81,6 +81,7 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 | Config | `src/config.py` | Env var-ok beolvasása, default értékek |
 | Scraper | `src/scraper.py` | FlareSolverr hívás, curl_cffi fetch, parse stratégia lánc (RSC → JSON anywhere → aria-label → heading) |
 | State | `src/state.py` | JSON state load/save, dataclass serialize |
+| History | `src/history.py` | Append-only CSV logging (trend tracking), graceful error handling |
 | Notifier | `src/notifier.py` | Telegram üzenetek (alert, recovery, heartbeat, daily summary, parse degradáció, fetch error). A `_send_telegram` `msg_type` paraméterrel logol típust. |
 | Main | `src/main.py` | Orchestrator: fetch → parse → degradáció check → decide → notify → heartbeat/summary → save. Strukturált logolás: minden futás teljes trace-t hagy (run started → action → run complete). |
 | Workflow | `.github/workflows/monitor.yml` | Cron, FlareSolverr service, secrets, state commit-back |
@@ -416,7 +417,56 @@ gh run view <RUN_ID> --log | grep -E "(Telegram sent|-> ok=)"
 
 ---
 
-## 9. Visszatérés fél év után – gyors útmutató
+## 9. History CSV (long-term trend tracking)
+
+### Hol van és mire jó?
+
+A `history.csv` a repó gyökerében van, a `state.json` mellé commitolódik. Minden sikeres scrape után egy új sor kerül a végére (append-only). Célja: hosszú távú trend elemzés és vizualizáció.
+
+### Struktúra
+
+```csv
+timestamp,value,threshold,alert_active
+2026-06-30T15:30:00+02:00,5,10,false
+2026-06-30T16:00:00+02:00,12,10,true
+```
+
+| Oszlop | Leírás |
+|---|---|
+| `timestamp` | Scrape időpontja ISO 8601-ben, Europe/Budapest TZ-vel |
+| `value` | Downdetector legfrissebb adatpontjának értéke |
+| `threshold` | Az aktuális ALERT_THRESHOLD (kontextus, ha később változik) |
+| `alert_active` | Volt-e riasztási állapot az adott futásban (a decide_action futása UTÁN) |
+
+### Elemzés
+
+```bash
+# Utolsó 10 sor
+tail -10 history.csv
+
+# Mai riasztások
+grep "true" history.csv | grep "$(date +%Y-%m-%d)"
+
+# Napi max értékek (awk)
+awk -F, 'NR>1 {split($1,d,"T"); if(d[1]!=prev){if(prev)print prev, max; max=$2; prev=d[1]} else if($2+0>max)max=$2+0} END{print prev, max}' history.csv
+
+# Python-nal
+python3 -c "
+import csv
+with open('history.csv') as f:
+    rows = list(csv.DictReader(f))
+print(f'Összesen {len(rows)} adatpont')
+print(f'Max érték: {max(int(r[\"value\"]) for r in rows)}')
+"
+```
+
+### Méretkorlát
+
+~17 500 sor/év ≈ 700 KB–1 MB. Ha a fájl meghaladja az 5 MB-ot, a log WARNING-ot generál. Nincs auto-rotáció — kézzel kell archiválni ha szükséges.
+
+---
+
+## 10. Visszatérés fél év után – gyors útmutató
 
 1. **Olvasd el ezt a fájlt** – most itt tartasz
 2. **Nézd meg a GitHub Actions**: Actions fül → van-e zöld pipa az utolsó futásoknál?

@@ -23,6 +23,7 @@ from src.notifier import (
 )
 from pathlib import Path
 
+from src.history import append_row
 from src.remediation import attempt_remediation
 from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, fetch_html, parse_reports
 from src.state import State, load, save
@@ -292,6 +293,16 @@ def _process_successful_fetch(
             logger.info("Retroactive alert notification -> ok=%s", ok)
             state.daily_alert_times.append(f"{spike_time}*")
             action = "retroactive_alert"
+
+    # Append to history CSV (after alert_active is updated)
+    append_row(
+        config.HISTORY_FILE,
+        current_value,
+        config.ALERT_THRESHOLD,
+        state.alert_active,
+        budapest_now,
+        max_size_mb=config.HISTORY_MAX_SIZE_MB,
+    )
 
     # Update state
     state.last_value = current_value

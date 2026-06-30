@@ -22,17 +22,20 @@ mbh-monitor/
 │   ├── notifier.py              # Telegram üzenetküldés
 │   ├── state.py                 # Állapot olvasás/írás
 │   ├── config.py                # Konfiguráció (küszöb, URL, stb.)
+│   ├── history.py               # Append-only CSV history logging (trend tracking)
 │   ├── remediation.py           # Auto-remediation alternatív fetch stratégiák
 │   └── main.py                  # Belépési pont – ezt hívja a GitHub Actions
 ├── tests/
 │   ├── test_scraper.py
 │   ├── test_notifier.py
 │   ├── test_state.py
+│   ├── test_history.py
 │   └── fixtures/                # Mentett HTML mintaadatok teszteléshez
 ├── .github/
 │   └── workflows/
 │       └── monitor.yml          # 30 percenkénti cron
 ├── state.json                   # Állapot (auto-commitelt)
+├── history.csv                  # Long-term trend tracking (append-only, auto-commitelt)
 ├── requirements.txt
 └── .claude/
     └── skills/
@@ -69,19 +72,22 @@ A projekten egy kis "csapat" dolgozik, mindegyiknek megvan a saját felelősség
 ### 1. Idempotens futás
 A `main.py` minden indításnál ugyanazt csinálja: lekér, összehasonlít, értesít ha kell, állapotot frissít. Nincs rejtett állapot a memóriában.
 
-### 2. Duplikáció-mentes riasztás
+### 2. Long-term history (trend tracking)
+Minden sikeres scrape után egy sor kerül a `history.csv` végére (append-only). Oszlopok: `timestamp,value,threshold,alert_active`. A timestamp Europe/Budapest TZ-vel ISO 8601 formátumban. A threshold mentése biztosítja, hogy küszöbváltozás után is megmaradjon a régi adatpontok kontextusa. A fájlt a workflow a `state.json`-nal együtt commitolja. Hibás scrape-nél NEM íródik sor. Ha a CSV írás elbukik, csak WARNING logot generál — a core funkció nem akad meg. Méretkorlát: 5 MB felett WARNING a logban (évi ~17 500 sor ≈ 700 KB–1 MB). Modul: `src/history.py`.
+
+### 3. Duplikáció-mentes riasztás
 Csak akkor küld riasztást, amikor **eléri vagy átlépi** a küszöböt (előző érték < küszöb, új >= küszöb). Helyreállás: amikor visszaesik a küszöb alá (új < küszöb). Ezt a `state.json` biztosítja.
 
 **Visszamenőleges spike detektálás**: Ha a chart adatpontok között (az utolsó `last_checked` óta) bármelyik átlépte a küszöböt, de a jelenlegi érték már alatta van, a rendszer `send_retroactive_alert()` üzenetet küld. Ez a `_detect_retroactive_spike()` függvény feladata. Az `alert_active` nem változik (nem kell recovery ciklus), és a napi összefoglalóban `*` jellel jelölt időpont jelzi a visszamenőleges riasztást.
 
-### 3. Heartbeat & napi összefoglaló (catchup logika)
+### 4. Heartbeat & napi összefoglaló (catchup logika)
 A `HEARTBEAT_HOURS` env var-ban megadott óráknál (Budapest TZ) küld üzenetet:
 - **Korábbi órák** (pl. 9): egyszerű heartbeat (aktuális hibaszám, küszöb)
 - **Utolsó óra** (pl. 19): napi összefoglaló (napi max + mikor, aktuális, küszöb, volt-e alert)
 - **Napi max**: a Downdetector chart 96 adatpontjából (24h, 15 perces intervallumok) számítja, nem csak a 30 perces futások értékéből – így a futások közötti csúcsok sem vesznek el
 - **Catchup**: ha a GitHub Actions cron kihagyja a konfigurált órát, a következő futás pótlólag elküldi (feltétel: `current_hour >= configured_hour` és ma még nem küldtük). Deduplikáció: óránként max 1 üzenet naponta (`state.json` `heartbeat_sent` dict).
 
-### 4. Redundáns ütemezés (belső + külső cron)
+### 5. Redundáns ütemezés (belső + külső cron)
 A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás kimaradás). Ezért **két triggerrel** dolgozunk:
 - **cron-job.org** (elsődleges): `:00` és `:30`-kor (`*/30`), workflow_dispatch API híváson keresztül
 - **GitHub Actions cron** (backup): `:15` és `:45`-kor (`15,45`), offset-elve az ütközés elkerüléséhez
@@ -89,10 +95,10 @@ A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás k
 - A script idempotens, a heartbeat deduplikált (`state.json`) → dupla futás nem okoz dupla értesítést
 - A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2026-07-25** — lejárat előtt rotálni kell.
 
-### 5. Graceful failure + azonnali remediation
+### 6. Graceful failure + azonnali remediation
 Ha a solver nem tudja lekérdezni az adatot, a script **azonnal** alternatív stratégiákkal próbálkozik (auto-remediation). Ha valamelyik sikerül, normál feldolgozás folytatódik. Ha egyik sem → csendben vár, és **~30 perc + 2 hiba** után küld értesítést a részletes diagnosztikával. Amikor a lekérdezés helyreáll, **fetch recovery értesítést** küld.
 
-### 6. Cloudflare-reziliens scraping (solver-agnosztikus, többrétegű védelem)
+### 7. Cloudflare-reziliens scraping (solver-agnosztikus, többrétegű védelem)
 A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt működik. A `_solver_fetch()` mindkét timeout formátumot küldi (`maxTimeout` ms-ben + `max_timeout` másodpercben), így a solver-csere deploy nélkül, GitHub variable-ből megoldható.
 
 - **Solver**: a `SOLVER_IMAGE` GitHub variable határozza meg (FlareSolverr vagy ByParr). A kód session management nélkül működik – a solver maga kezeli a browser lifecycle-t.
@@ -104,12 +110,12 @@ A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt m
 - **ZenRows**: a remediation modul kezeli (nem a `fetch_html()`), 4 stratégiával: no-premium (1 kredit), premium HU (10-25 kredit), alt-country (DE/AT/US), direkt HTTP. Kredit figyelmeztetés ha a ZenRows egyenleg `ZENROWS_CREDIT_WARNING_THRESHOLD` alá esik.
 - **Napi SLA szint**: napi (`daily_total_fetches`/`daily_failed_fetches`) és kumulatív (`total_fetches`/`failed_fetches`) számlálók, napi SLA % a napi összefoglalóban
 
-### 7. Scraping respectful
+### 8. Scraping respectful
 - User-Agent reális (FlareSolverr Chrome)
 - 30 percnél gyakrabban SOHA nem kérdez le
 - Ha 429-et kapunk, exponenciális backoff
 
-### 8. Strukturált logolás (post-mortem rekonstrukció)
+### 9. Strukturált logolás (post-mortem rekonstrukció)
 Minden futás teljes log-trace-t hagy a GitHub Actions logban, amiből visszaállítható egy napi riport. Kulcs log sorok:
 - **Run started**: küszöb, heartbeat órák, state összefoglaló (value, failures, alert_active)
 - **Chart max today**: napi chart maximum + korábbi daily_max összehasonlítás
@@ -127,7 +133,7 @@ Minden futás teljes log-trace-t hagy a GitHub Actions logban, amiből visszaál
 
 Post-mortem parancs: `gh run view <ID> --log | grep INFO` → teljes napi kép.
 
-### 9. Változásra érzékeny (parse stratégia lánc + degradáció-érzékelés)
+### 10. Változásra érzékeny (parse stratégia lánc + degradáció-érzékelés)
 A Downdetector HTML formátuma bármikor változhat. A `parse_reports()` stratégia lánca:
 1. **RSC** (`rsc`): Next.js `__next_f.push()` payloadokból `dataPoints` tömb — legpontosabb, 96 adatpont
 2. **JSON anywhere** (`json_anywhere`): bármilyen JSON tömb a HTML-ben ami `timestampUtc`/`reportsValue` mezőket tartalmaz — ha az RSC delivery megváltozik de az adatstruktúra nem
@@ -142,7 +148,7 @@ Ha az RSC stratégia nem működik és fallback-re kerül a sor, a rendszer:
 
 **Skeleton page detektálás és automatikus re-fetch**: Ha a `parse_reports()` a `heading` stratégiára esik vissza (ami csak "no current problems" → 0-t tud jelezni, chart adat nélkül), a `run()` automatikusan meghívja az `attempt_remediation()`-t alternatív forrásból (ZenRows, direkt HTTP) a valódi chart adatokért. Ha a remediation jobb stratégiát ad (nem heading) → azt használja (`via_remediation` jelöléssel). Ha a remediation is heading-et ad → az eredeti eredménnyel folytatja (+ degradáció alert). A skeleton HTML debug-ként mentésre kerül.
 
-### 10. Auto-remediation (azonnali javítási kísérlet)
+### 11. Auto-remediation (azonnali javítási kísérlet)
 Ha a solver elbukik, a rendszer **azonnal** alternatív stratégiákkal próbálkozik (nem vár 3-4 hibáig):
 
 ```
