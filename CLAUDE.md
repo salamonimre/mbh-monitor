@@ -93,7 +93,7 @@ A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás k
 - **GitHub Actions cron** (backup): `:15` és `:45`-kor (`15,45`), offset-elve az ütközés elkerüléséhez
 - **Concurrency group** (`monitor`, `cancel-in-progress: false`): ha mégis átfedés lenne, a második futás sorba áll
 - A script idempotens, a heartbeat deduplikált (`state.json`) → dupla futás nem okoz dupla értesítést
-- A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2026-12-30** — lejárat előtt rotálni kell.
+- A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2027-01-13** — lejárat előtt rotálni kell.
 
 ### 6. Graceful failure + azonnali remediation
 Ha a solver nem tudja lekérdezni az adatot, a script **azonnal** alternatív stratégiákkal próbálkozik (auto-remediation). Ha valamelyik sikerül, normál feldolgozás folytatódik. Ha egyik sem → csendben vár, és **~30 perc + 2 hiba** után küld értesítést a részletes diagnosztikával. Amikor a lekérdezés helyreáll, **fetch recovery értesítést** küld.
@@ -205,7 +205,7 @@ gh workflow run monitor.yml
 | `DOWNDETECTOR_URL` | nem | Default: MBH Bank URL |
 | `HEARTBEAT_ENABLED` | nem | Napi heartbeat, default `true` |
 | `HEARTBEAT_HOURS` | nem | Heartbeat órák vesszővel (Budapest TZ), default `9,19`. Az utolsó óra napi összefoglalót küld. |
-| `PAT_EXPIRY_DATE` | nem | cron-job.org PAT lejárati dátum (`YYYY-MM-DD`), default `2026-12-30`. 30 napon belül figyelmeztet a napi összefoglalóban. |
+| `PAT_EXPIRY_DATE` | nem | cron-job.org PAT lejárati dátum (`YYYY-MM-DD`), default `2027-01-13`. 30 napon belül figyelmeztet a napi összefoglalóban. |
 | `MAX_RETRIES` | nem | Fetch retry kísérletek száma, default `5`. |
 | `FLARESOLVERR_MAX_TIMEOUT` | nem | Solver challenge timeout ms-ben, default `60000`. Növeld ha a Cloudflare challenge timeout-ol. |
 | `FLARESOLVERR_PROXY` | nem | Proxy URL a FlareSolverr-nek (pl. `http://user:pass@proxy:8080`). Ha a GitHub Actions IP blokkolva van. |
