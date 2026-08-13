@@ -1,6 +1,6 @@
 {
   "last_value": 0,
-  "last_checked": "2026-08-13T21:33:28.036146+00:00",
+  "last_checked": "2026-08-13T22:02:02.196332+00:00",
   "alert_active": false,
   "alert_started_at": null,
   "consecutive_fetch_failures": 0,
@@ -11,18 +11,14 @@
     "19": "2026-08-13",
     "15": "2026-04-24"
   },
-  "daily_max_value": 30,
-  "daily_max_time": "14:29",
-  "daily_max_date": "2026-08-13",
-  "daily_alert_times": [
-    "14:36",
-    "16:33*",
-    "18:08"
-  ],
+  "daily_max_value": 0,
+  "daily_max_time": null,
+  "daily_max_date": "2026-08-14",
+  "daily_alert_times": [],
   "degraded_parse_alert_sent": false,
-  "total_fetches": 5473,
+  "total_fetches": 5474,
   "failed_fetches": 29,
-  "daily_total_fetches": 80,
+  "daily_total_fetches": 1,
   "daily_failed_fetches": 0,
   "remediation_attempts": {
     "zenrows_no_premium": {
