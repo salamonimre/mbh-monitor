@@ -1,6 +1,6 @@
 {
   "last_value": 0,
-  "last_checked": "2026-08-31T03:52:35.267418+00:00",
+  "last_checked": "2026-08-31T04:01:53.958029+00:00",
   "alert_active": false,
   "alert_started_at": null,
   "consecutive_fetch_failures": 0,
@@ -16,9 +16,9 @@
   "daily_max_date": "2026-08-31",
   "daily_alert_times": [],
   "degraded_parse_alert_sent": false,
-  "total_fetches": 6797,
+  "total_fetches": 6798,
   "failed_fetches": 42,
-  "daily_total_fetches": 21,
+  "daily_total_fetches": 22,
   "daily_failed_fetches": 2,
   "remediation_attempts": {
     "zenrows_no_premium": {
