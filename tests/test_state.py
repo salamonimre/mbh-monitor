@@ -44,6 +44,13 @@ class TestState:
         s = State.from_dict(d)
         assert s.last_value == 10
 
+    def test_from_dict_missing_weekly_fields_uses_defaults(self):
+        """Old state.json without weekly remediation fields loads with defaults."""
+        d = {"last_value": 5, "alert_active": False}
+        s = State.from_dict(d)
+        assert s.weekly_remediation_count == 0
+        assert s.weekly_remediation_week is None
+
 
 class TestLoadSave:
     def test_load_missing_file_returns_default(self, tmp_path):

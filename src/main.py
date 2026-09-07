@@ -124,6 +124,14 @@ def _reset_daily_stats_if_needed(state: State, today_str: str) -> None:
         state.daily_failed_fetches = 0
 
 
+def _reset_weekly_stats_if_needed(state: State, budapest_now: datetime) -> None:
+    """Reset weekly remediation counter when the ISO week changes."""
+    current_week = budapest_now.strftime("%G-W%V")  # e.g. "2026-W36"
+    if state.weekly_remediation_week != current_week:
+        state.weekly_remediation_count = 0
+        state.weekly_remediation_week = current_week
+
+
 def _update_daily_stats(state: State, max_value: int, max_time: str | None) -> None:
     """Update daily max if the given value is higher."""
     if max_value > state.daily_max_value:
@@ -317,6 +325,9 @@ def _process_successful_fetch(
             pat_warning = _get_pat_expiry_warning()
             if pat_warning:
                 warnings.append(pat_warning)
+            # Include weekly remediation count on Sundays
+            weekly_rem = (state.weekly_remediation_count
+                          if budapest_now.weekday() == 6 else None)
             ok = send_daily_summary(
                 current_value=current_value,
                 threshold=config.ALERT_THRESHOLD,
@@ -325,6 +336,7 @@ def _process_successful_fetch(
                 alert_times=state.daily_alert_times,
                 warnings=warnings,
                 fetch_stats=(state.daily_total_fetches, state.daily_failed_fetches),
+                weekly_remediation_count=weekly_rem,
             )
             logger.info("Daily summary notification -> ok=%s", ok)
         else:
@@ -378,6 +390,7 @@ def run(state_path: str | None = None) -> int:
 
     # Reset daily stats if date changed
     _reset_daily_stats_if_needed(state, today_str)
+    _reset_weekly_stats_if_needed(state, budapest_now)
 
     # Attempt to fetch and parse report data (split for debug HTML on parse failure)
     state.total_fetches += 1
@@ -439,21 +452,10 @@ def run(state_path: str | None = None) -> int:
             logger.info("Remediation result: SUCCESS via %s | processing normally",
                         rem_result.strategy_used)
 
-            # Send success report
-            attempt_dicts = [
-                {"strategy": a.strategy, "result": a.result,
-                 "duration_s": a.duration_s, "error": a.error}
-                for a in rem_result.attempts
-            ]
-            ok = send_remediation_report(
-                success=True,
-                error_category=rem_result.error_category.value,
-                consecutive_failures=state.consecutive_fetch_failures,
-                attempts=attempt_dicts,
-                strategy_used=rem_result.strategy_used,
-                duration_s=rem_result.duration_s,
-            )
-            logger.info("Remediation report sent -> ok=%s", ok)
+            # Track weekly remediation usage (silent — no Telegram)
+            state.weekly_remediation_count += 1
+            logger.info("Weekly remediation count: %d (week %s)",
+                        state.weekly_remediation_count, state.weekly_remediation_week)
 
             # Check ZenRows credit warning
             if (

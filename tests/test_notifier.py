@@ -105,6 +105,31 @@ class TestAlertMessages:
         assert "⚠️" in msg
 
     @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_daily_summary_with_weekly_remediation(self, mock_send):
+        result = send_daily_summary(3, 10, daily_max=7, daily_max_time="11:00",
+                                     alert_times=[], weekly_remediation_count=4)
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "Heti remediation: 4x" in msg
+        assert "ZenRows" in msg
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_daily_summary_without_weekly_remediation(self, mock_send):
+        result = send_daily_summary(3, 10, daily_max=7, daily_max_time="11:00",
+                                     alert_times=[])
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "remediation" not in msg.lower()
+
+    @patch("src.notifier._send_telegram", return_value=True)
+    def test_send_daily_summary_zero_weekly_remediation(self, mock_send):
+        result = send_daily_summary(3, 10, daily_max=7, daily_max_time="11:00",
+                                     alert_times=[], weekly_remediation_count=0)
+        assert result is True
+        msg = mock_send.call_args[0][0]
+        assert "Heti remediation: 0x" in msg
+
+    @patch("src.notifier._send_telegram", return_value=True)
     def test_send_parse_degradation_alert(self, mock_send):
         result = send_parse_degradation_alert("json_anywhere", 7)
         assert result is True

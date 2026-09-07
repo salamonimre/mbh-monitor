@@ -144,12 +144,14 @@ def send_daily_summary(
     alert_times: list[str],
     warnings: list[str] | None = None,
     fetch_stats: tuple[int, int] | None = None,
+    weekly_remediation_count: int | None = None,
     **kwargs,
 ) -> bool:
     """Send end-of-day summary with daily max, alerts, and current state.
 
     Args:
         fetch_stats: Optional (total_fetches, failed_fetches) tuple for reliability display.
+        weekly_remediation_count: If not None, show weekly remediation usage (Sundays only).
     """
     alert_section = ""
     if alert_times:
@@ -166,6 +168,10 @@ def send_daily_summary(
         success_rate = ((total - failed) / total) * 100
         reliability_section = f"Napi SLA szint: {success_rate:.0f}% ({total - failed}/{total} sikeres)\n"
 
+    remediation_section = ""
+    if weekly_remediation_count is not None:
+        remediation_section = f"Heti remediation: {weekly_remediation_count}x (ZenRows fallback)\n"
+
     warning_section = ""
     if warnings:
         warning_section = "\n" + "\n".join(f"⚠️ {w}" for w in warnings) + "\n"
@@ -177,6 +183,7 @@ def send_daily_summary(
         f"Küszöb: {threshold}\n"
         f"{alert_section}"
         f"{reliability_section}"
+        f"{remediation_section}"
         f"{warning_section}\n"
         f'<a href="{config.DOWNDETECTOR_URL}">Downdetector oldal</a>'
     )

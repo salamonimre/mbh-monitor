@@ -16,6 +16,7 @@ from src.main import (
     _get_heartbeat_hour,
     _is_summary_hour,
     _reset_daily_stats_if_needed,
+    _reset_weekly_stats_if_needed,
     _update_daily_stats,
     _get_chart_max_today,
 )
@@ -1038,3 +1039,128 @@ class TestSkeletonRefetch:
         # Falls through to original heading result -> degradation alert
         mock_degrad.assert_called_once_with("heading", 0)
         assert loaded.degraded_parse_alert_sent is True
+
+
+class TestWeeklyRemediation:
+    """Test weekly remediation counter and silent success remediation."""
+
+    def test_reset_weekly_stats_same_week(self):
+        state = State(weekly_remediation_count=3, weekly_remediation_week="2026-W36")
+        budapest_now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=BUDAPEST_TZ)  # Tuesday W36
+        _reset_weekly_stats_if_needed(state, budapest_now)
+        assert state.weekly_remediation_count == 3  # unchanged
+        assert state.weekly_remediation_week == "2026-W36"
+
+    def test_reset_weekly_stats_new_week(self):
+        state = State(weekly_remediation_count=5, weekly_remediation_week="2026-W35")
+        budapest_now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=BUDAPEST_TZ)  # W36
+        _reset_weekly_stats_if_needed(state, budapest_now)
+        assert state.weekly_remediation_count == 0
+        assert state.weekly_remediation_week == "2026-W36"
+
+    def test_reset_weekly_stats_none_week(self):
+        """First run ever — weekly_remediation_week is None."""
+        state = State(weekly_remediation_count=0, weekly_remediation_week=None)
+        budapest_now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=BUDAPEST_TZ)
+        _reset_weekly_stats_if_needed(state, budapest_now)
+        assert state.weekly_remediation_week == "2026-W36"
+
+    @patch("src.main.attempt_remediation")
+    @patch("src.main.fetch_html", side_effect=Exception("solver timeout"))
+    def test_success_remediation_no_telegram(self, mock_html, mock_remediation, tmp_path):
+        """Successful remediation should NOT send Telegram, only increment counter."""
+        from src.remediation import AttemptDetail, ErrorCategory, RemediationResult
+        mock_remediation.return_value = RemediationResult(
+            success=True,
+            error_category=ErrorCategory.NETWORK_ERROR,
+            html="<html>ok</html>",
+            parse_result=_make_result(3),
+            strategy_used="zenrows_no_premium",
+            attempts=[AttemptDetail("zenrows_no_premium", "SUCCESS", 4.2)],
+            duration_s=4.2,
+        )
+        state_path = tmp_path / "state.json"
+        save(State(), state_path)
+
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.send_remediation_report") as mock_rem_report:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = False
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.JITTER_MAX_SECONDS = 0
+            mock_config.ZENROWS_CREDIT_WARNING_THRESHOLD = 50
+
+            run(str(state_path))
+
+        mock_rem_report.assert_not_called()
+        loaded = load(state_path)
+        assert loaded.weekly_remediation_count == 1
+
+    @patch("src.main.send_daily_summary", return_value=True)
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_sunday_summary_includes_weekly_remediation(self, mock_html, mock_parse, mock_summary, tmp_path):
+        """Sunday evening summary should pass weekly_remediation_count."""
+        mock_parse.return_value = _make_result(3)
+        state_path = tmp_path / "state.json"
+        # 2026-09-06 is a Sunday
+        save(State(daily_max_value=5, daily_max_time="12:00",
+                   daily_max_date="2026-09-06",
+                   heartbeat_sent={"9": "2026-09-06"},
+                   weekly_remediation_count=4, weekly_remediation_week="2026-W36"),
+             state_path)
+        fake_now = datetime(2026, 9, 6, 17, 10, 0, tzinfo=timezone.utc)  # 19:10 Budapest, Sunday
+
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.datetime") as mock_dt:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = True
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.PAT_EXPIRY_DATE = ""
+            mock_config.JITTER_MAX_SECONDS = 0
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            run(str(state_path))
+
+        mock_summary.assert_called_once()
+        assert mock_summary.call_args[1]["weekly_remediation_count"] == 4
+
+    @patch("src.main.send_daily_summary", return_value=True)
+    @patch("src.main.parse_reports")
+    @patch("src.main.fetch_html", return_value="<html>ok</html>")
+    def test_weekday_summary_excludes_weekly_remediation(self, mock_html, mock_parse, mock_summary, tmp_path):
+        """Non-Sunday evening summary should NOT pass weekly_remediation_count."""
+        mock_parse.return_value = _make_result(3)
+        state_path = tmp_path / "state.json"
+        # 2026-07-15 is a Wednesday
+        save(State(daily_max_value=5, daily_max_time="12:00",
+                   daily_max_date="2026-07-15",
+                   heartbeat_sent={"9": "2026-07-15"},
+                   weekly_remediation_count=2, weekly_remediation_week="2026-W29"),
+             state_path)
+        fake_now = datetime(2026, 7, 15, 17, 10, 0, tzinfo=timezone.utc)  # 19:10 Budapest, Wednesday
+
+        with patch("src.main.config") as mock_config, \
+             patch("src.main.datetime") as mock_dt:
+            mock_config.validate.return_value = []
+            mock_config.STATE_FILE = str(state_path)
+            mock_config.ALERT_THRESHOLD = 10
+            mock_config.DOWNDETECTOR_URL = "https://example.com"
+            mock_config.HEARTBEAT_ENABLED = True
+            mock_config.HEARTBEAT_HOURS = [9, 19]
+            mock_config.PAT_EXPIRY_DATE = ""
+            mock_config.JITTER_MAX_SECONDS = 0
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            run(str(state_path))
+
+        mock_summary.assert_called_once()
+        assert mock_summary.call_args[1]["weekly_remediation_count"] is None

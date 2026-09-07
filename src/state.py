@@ -39,6 +39,9 @@ class State:
     remediation_report_sent: bool = False  # spam prevention for diagnostic reports
     first_failure_at: datetime | None = None  # timestamp of first failure in current streak
     zenrows_credits_remaining: int | None = None  # last known ZenRows credit balance
+    # Weekly remediation counter (resets on ISO week change)
+    weekly_remediation_count: int = 0
+    weekly_remediation_week: str | None = None  # ISO week, e.g. "2026-W36"
 
     def to_dict(self) -> dict:
         d = asdict(self)
