@@ -160,7 +160,8 @@ except ág:
   │   │   2. ZenRows premium HU proxy-val (10-25 kredit)
   │   │   3. ZenRows más ország proxy-val (DE/AT/US)
   │   │   4. Direkt HTTP kérés (solver nélkül, 0 kredit)
-  │   ├─ Ha sikerül → normál feldolgozás + siker riport + kredit figyelmeztetés
+  │   ├─ Ha sikerül → normál feldolgozás (CSENDBEN, nincs Telegram)
+  │   │   └─ Heti számláló növelés (state: weekly_remediation_count)
   │   └─ Ha mind bukik → csend, amíg:
   │       elapsed >= 30 perc AND hibák >= 2 → diagnosztikai riport
   └─ Eszkaláció: 6., 12., 24. hibánál újra küld riportot
@@ -170,11 +171,11 @@ except ág:
 - **ZenRows optimalizáció**: a `fetch_html()` csak a solver-t használja, a ZenRows kizárólag remediation stratégia → nincs dupla ZenRows hívás
 - **Hiba kategóriák**: `SOLVER_UNREACHABLE`, `CLOUDFLARE_BLOCK`, `RATE_LIMITED`, `ZENROWS_CREDITS`, `TARGET_DOWN`, `NETWORK_ERROR`, `PARSE_FAILURE`, `UNKNOWN`
 - **Progresszív cooldown**: bukott stratégia `min(30 * fail_count, REMEDIATION_COOLDOWN_MINUTES)` percig nem próbálkozik újra (state-ben: `remediation_attempts`)
-- **Időalapú értesítés**: `NOTIFICATION_DELAY_MINUTES` (30) perc + `NOTIFICATION_MIN_FAILURES` (2) hiba után küld részletes diagnosztikát, nem azonnal
+- **ÉrtesítésiPolicy**: sikeres remediation **nem küld Telegram üzenetet** — csak strukturált logot hagy. Sikertelen remediation: `NOTIFICATION_DELAY_MINUTES` (30) perc + `NOTIFICATION_MIN_FAILURES` (2) hiba után küld részletes diagnosztikát. Eszkaláció: 6/12/24 hibánál újra küld.
+- **Heti összesítő**: a `weekly_remediation_count` számolja a sikeres remediation-öket. Vasárnap esti napi összefoglalóban jelenik meg: `"Heti remediation: Xx (ZenRows fallback)"`. A számláló ISO hétváltáskor nullázódik (`weekly_remediation_week` state mező).
 - **Kredit védelem**: `ZENROWS_CREDIT_WARNING_THRESHOLD` alatti egyenlegnél `send_zenrows_credit_warning()` Telegram üzenet
 - **Spam-védelem**: `error_alert_sent` + `remediation_report_sent` state flag-ek, eszkaláció csak 6/12/24 hibánál
 - **Logolás**: minden stratégia-próbálkozás strukturált logot hagy (`category`, `strategy`, `duration_s`, `result`, `credits`)
-- **Értesítés**: `send_remediation_report()` két variáns (sikeres/sikertelen), `msg_type="remediation_report"`
 
 ## Kulcs parancsok
 
