@@ -116,7 +116,7 @@ A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt m
 
 ### 8. Scraping respectful
 - User-Agent reális (FlareSolverr Chrome)
-- A két trigger együtt óránként legfeljebb ~4 lekérést ad (kb. 15 percenként). Az eredeti elv 30 perc volt; a dupla trigger óta ez felülvizsgálandó (Imre döntése, 2026-11-19).
+- A két trigger együtt óránként legfeljebb ~4 lekérést ad (kb. 15 percenként). Ez az ütemezés (offsetelt GitHub cron + cron-job.org + jitter) a korábbi, `:00`/`:30`-as futásokat érintő Downdetector-blokkolás után alakult ki, és bevált. **Döntés (Imre, 2026-11-19): az ütemezéshez és az üzleti logikához nem nyúlunk** – módosítás csak Imre kifejezett kérésére.
 - Ha 429-et kapunk, exponenciális backoff
 
 ### 9. Strukturált logolás (post-mortem rekonstrukció)
@@ -228,4 +228,4 @@ GitHub-on ezek **Secrets**-ként vannak tárolva (Settings → Secrets and varia
 
 ## Jogi figyelmeztetés
 
-A Downdetector Fair Use szabályzata kereskedelmi célú scraping-et nem enged. Ez a projekt **kizárólag személyes monitorozásra készült**, alacsony frekvenciával (30 percenként egy kérés). Nyilvános szolgáltatásként vagy kereskedelmi célra nem szabad üzemeltetni – ahhoz a hivatalos (fizetős) Ookla Enterprise API kell.
+A Downdetector Fair Use szabályzata kereskedelmi célú scraping-et nem enged. Ez a projekt **kizárólag személyes monitorozásra készült**, alacsony frekvenciával (óránként legfeljebb ~4 kérés, lásd 8. pont). Nyilvános szolgáltatásként vagy kereskedelmi célra nem szabad üzemeltetni – ahhoz a hivatalos (fizetős) Ookla Enterprise API kell.
