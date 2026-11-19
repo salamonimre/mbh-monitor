@@ -39,7 +39,7 @@ A Downdetector bármikor átalakíthatja a HTML-t. A parser legyen:
 
 ```
 ┌─────────────────┐
-│ GitHub Actions  │  cron: */5 * * * *
+│ GitHub Actions  │  cron: 17,47 + cron-job.org :00/:30
 │   (runner)      │
 └────────┬────────┘
          │ python -m src.main
@@ -66,7 +66,7 @@ A Downdetector bármikor átalakíthatja a HTML-t. A parser legyen:
 - Valid-álja a konfigot induláskor (pl. token formátum)
 
 **`scraper.py`**
-- `fetch_html(url) -> str` — FlareSolverr + curl_cffi kétlépéses fetch
+- `fetch_html(url) -> str` — solver (FlareSolverr/ByParr) HTML-je, retry + health check; hiba esetén `remediation.py` (ZenRows, direkt HTTP)
 - `parse_reports(html) -> ParseResult` — stratégia lánc (RSC → JSON anywhere → aria-label → heading → ParseError)
 - Visszaad időrendezett `ReportPoint` listát + stratégia nevet
 - HTTP retry exponenciális backoff-fal

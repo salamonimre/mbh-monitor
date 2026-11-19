@@ -7,32 +7,20 @@ Ez a dokumentum leírja a scraper architektúráját, a tipikus hibákat, és ho
 ## 1. Architektúra áttekintés
 
 ```
-Triggerek: cron-job.org (:00/:30) + GitHub Actions cron (:15/:45)
+Triggerek: cron-job.org (:00/:30) + GitHub Actions cron (:17/:47)
     │
     ▼
 ┌─────────────────────────────────────┐
-│  FlareSolverr (Docker service)      │
-│  ghcr.io/flaresolverr/flaresolverr │
+│  Solver (Docker service)            │
+│  SOLVER_IMAGE: FlareSolverr/ByParr  │
 │  Port 8191                          │
 │  Feladat: Cloudflare challenge      │
 │  megoldása headless Chromium-mal    │
-│  Eredmény: cf_clearance cookie +   │
-│  User-Agent string (Chrome verzió)  │
+│  Eredmény: a lap HTML-je            │
+│  (retry + backoff, health check)    │
+│  Hiba → remediation (ZenRows/HTTP)  │
 └──────────────┬──────────────────────┘
-               │ cookies + UA
-               ▼
-┌─────────────────────────────────────┐
-│  curl_cffi (Chrome TLS fingerprint) │
-│  impersonate=CURL_CFFI_IMPERSONATE               │
-│  Feladat: raw SSR HTML letöltése    │
-│  a FlareSolverr cookie-kkal         │
-│  Miért: Cloudflare a cookie-t a     │
-│  TLS fingerprinthez köti, ezért     │
-│  nem elég a sima requests lib       │
-│  Eredmény: ~282 KB raw HTML         │
-│  403 → részletes log (cf-ray, body) │
-└──────────────┬──────────────────────┘
-               │ raw HTML
+               │ HTML
                ▼
 ┌─────────────────────────────────────┐
 │  Parse stratégia lánc               │
@@ -60,11 +48,13 @@ Triggerek: cron-job.org (:00/:30) + GitHub Actions cron (:15/:45)
 
 A Downdetector Cloudflare mögött fut. Normál HTTP kérések (requests, curl) 403-at kapnak. A FlareSolverr egy headless Chromium-ot futtat, ami megoldja a Cloudflare JS challenge-et, és visszaadja a bypass cookie-kat.
 
-### Miért kell curl_cffi?
+### Korábban: curl_cffi
 
-Cloudflare a `cf_clearance` cookie-t a böngésző TLS fingerprintjéhez (JA3/JA4) köti. Ha a cookie-t egy eltérő TLS fingerprintű kliensből használjuk (pl. Python `requests`), 403-at kapunk. A `curl_cffi` a Chrome TLS fingerprintjét utánozza (konfigurálható: `CURL_CFFI_IMPERSONATE` env var, default `chrome136`), így a cookie érvényes marad.
+A korábbi kétlépéses fetch (FlareSolverr cookie + `curl_cffi` Chrome TLS fingerprint) kikerült a kódból: a `fetch_html()` ma közvetlenül a solver által visszaadott HTML-t használja, a `curl_cffi` nincs a függőségek között. Ha a Cloudflare újra TLS-fingerprintre kötné a cookie-t, ez a megoldás visszahozható.
 
-### Miért nem elég a FlareSolverr válasz HTML-je?
+### Miért nem volt elég régen a FlareSolverr válasz HTML-je? (történeti)
+
+> 2026-11: a jelenlegi kód a solver HTML-jét használja, és az RSC-adat benne van. Ha ez megváltozik, ez a bekezdés magyarázza, miért kellett korábban a raw SSR HTML.
 
 A FlareSolverr a renderelt DOM-ot adja vissza (JS futtatás után). A Next.js RSC stream (`__next_f.push` script tagek) erre már nincsenek benne, mert a React hydration felhasználta őket. A raw SSR HTML-ben viszont még benne vannak a pontos `reportsValue` adatok.
 
@@ -79,7 +69,7 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 | Komponens | Fájl | Feladat |
 |---|---|---|
 | Config | `src/config.py` | Env var-ok beolvasása, default értékek |
-| Scraper | `src/scraper.py` | FlareSolverr hívás, curl_cffi fetch, parse stratégia lánc (RSC → JSON anywhere → aria-label → heading) |
+| Scraper | `src/scraper.py` | Solver-hívás (FlareSolverr/ByParr), retry, parse stratégia lánc (RSC → JSON anywhere → aria-label → heading) |
 | State | `src/state.py` | JSON state load/save, dataclass serialize |
 | History | `src/history.py` | Append-only CSV logging (trend tracking), graceful error handling |
 | Notifier | `src/notifier.py` | Telegram üzenetek (alert, recovery, heartbeat, daily summary, parse degradáció, fetch error). A `_send_telegram` `msg_type` paraméterrel logol típust. |
@@ -105,22 +95,15 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 
 **Megjegyzés**: A `degraded_parse_alert_sent` state flag megakadályozza a spam-et. Ha az RSC parser újra működik, a flag automatikusan resetelődik.
 
-### "HTTP 403 despite cookies"
+### "HTTP 403" / Cloudflare challenge
 
-**Tünet**: FlareSolverr sikeresen ad cookie-kat, de a curl_cffi fetch 403-at kap. A log részletes diagnosztikát tartalmaz: `cf-ray`, `body snippet`, `impersonate` érték, és Cloudflare error code (pl. 1020).
-
-**Ok**:
-- A cookie lejárt (FlareSolverr lassú volt, és a cookie érvényessége rövid)
-- TLS fingerprint mismatch (curl_cffi verzió nem egyezik a FlareSolverr Chrome verziójával)
-- Cloudflare frissített és az aktuális impersonation profil elavult
-- Cloudflare 1020 error: access denied, valószínűleg TLS mismatch
+**Tünet**: a solver nem kap valódi lapot (kis méretű challenge HTML, 403, vagy „Challenge detected!” a solver logjában).
 
 **Teendő**:
-1. Nézd a logban a Chrome verziót (`Got N cookies from FlareSolverr (Chrome 136)`) — ha a FlareSolverr Chrome verziója és a `CURL_CFFI_IMPERSONATE` értéke nagyon eltér, az a baj
-2. Próbáld módosítani a `CURL_CFFI_IMPERSONATE` env var-t (pl. `chrome131`, `chrome136`)
-3. Frissítsd a curl_cffi-t: `pip install --upgrade curl_cffi`
-4. Frissítsd a FlareSolverr image-et: `ghcr.io/flaresolverr/flaresolverr:latest`
-5. Ellenőrizd a FlareSolverr logot – ha "Challenge detected!" áll benne, a FlareSolverr sem tudja megoldani
+1. Nézd meg a debug HTML méretét az artifactban (~6 KB = challenge oldal).
+2. Próbáld a másik solvert: `SOLVER_IMAGE` variable → `ghcr.io/thephaseless/byparr:latest` (deploy nélkül).
+3. Ellenőrizd, hogy a remediation (ZenRows) lefutott-e, és van-e kredit.
+4. Ha a GitHub Actions IP blokkolva van: `FLARESOLVERR_PROXY`.
 
 ### "FlareSolverr timeout" / ConnectionError
 
@@ -137,7 +120,7 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 
 **Ok**: Bármi a fentiekből. 3 egymás utáni hiba (~1.5 óra) után kapsz értesítést.
 
-**Teendő**: Nézd meg a GitHub Actions logot, azonosítsd melyik lépés bukik (FlareSolverr, curl_cffi, vagy parser).
+**Teendő**: Nézd meg a GitHub Actions logot, azonosítsd melyik lépés bukik (solver, remediation vagy parser).
 
 ### "Forbidden: bot is not a member of the group"
 
@@ -160,7 +143,7 @@ A `chartData` objektumban a `dataPoints` tömb után további mezők vannak. A r
 
 **Tünet**: A GitHub Actions logban `Push failed, remote has diverged. Recovering...` üzenetek, vagy `::warning::Failed to push state.json after 3 attempts`.
 
-**Ok**: Két párhuzamos futás (pl. cron-job.org `:00` és GitHub cron `:15` átfedése) egyszerre próbálja commitolni a state.json-t. A concurrency group megakadályozza a párhuzamos futást, de edge case-ekben (pl. az első futás commit lépése közben indul a második) előfordulhat.
+**Ok**: Két párhuzamos futás (pl. cron-job.org `:00` és egy késő GitHub cron átfedése) egyszerre próbálja commitolni a state.json-t. A concurrency group megakadályozza a párhuzamos futást, de edge case-ekben (pl. az első futás commit lépése közben indul a második) előfordulhat.
 
 **Hogyan kezeli a rendszer**:
 1. A workflow `set +e`-vel fut, minden hibát kézzel kezel
@@ -277,8 +260,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 | Függőség | Verzió | Szerepe |
 |---|---|---|
 | FlareSolverr | `latest` (jelenleg v3.4.6) | Cloudflare bypass, headless Chromium |
-| curl_cffi | `>=0.7,<1` (jelenleg 0.13.0) | Chrome TLS fingerprint impersonation |
-| requests | `>=2.31,<3` | FlareSolverr API hívás, Telegram API |
+| requests | `>=2.31,<3` | Solver API hívás, Telegram API, ZenRows |
 | Python | 3.11 (GitHub Actions) | Runtime |
 | Chromium | FlareSolverr belseje (142) | FlareSolverr böngészője |
 
@@ -293,11 +275,9 @@ Cloudflare rendszeresen frissíti a bot-detection logikáját. Amikor ez törté
 - Megoldás: FlareSolverr image frissítése (`docker pull ghcr.io/flaresolverr/flaresolverr:latest`)
 - A FlareSolverr fejlesztők általában 1-2 héten belül kiadnak patch-et
 
-### TLS fingerprint eltérés
+### TLS fingerprint eltérés (korábbi, curl_cffi-s megoldásnál)
 
-Ha a curl_cffi és a FlareSolverr más Chrome verziót utánoz, Cloudflare eldobja a cookie-t. Ez a curl_cffi frissítésekor fordulhat elő.
-- Tünet: 403 a curl_cffi fetch-nél, pedig FlareSolverr sikeresen ad cookie-t. A log mutatja a Chrome verziót és az impersonate értéket.
-- Megoldás: `CURL_CFFI_IMPERSONATE` GitHub Actions változót állítsd a FlareSolverr Chrome verziójához közelire (pl. `chrome131`, `chrome136`). Nem kell kód módosítás.
+A mostani kód nem használ curl_cffi-t, ezért ez a hibaforrás jelenleg nem áll fenn. Ha a solver HTML-je újra nem tartalmazná az adatot, és visszakerül a kétlépéses fetch, akkor ismét figyelni kell a Chrome-verziók egyezésére.
 
 ### Downdetector frontend változások
 
@@ -473,7 +453,7 @@ print(f'Max érték: {max(int(r[\"value\"]) for r in rows)}')
 3. **Ha nem fut**: 60 napos inaktivitás? → Actions → Enable workflow
 4. **Ha fut de piros**: Nézd a logot → melyik lépés bukik?
    - FlareSolverr nem indul → frissítsd az image-et
-   - 403 → frissítsd curl_cffi-t és FlareSolverr-t
+   - 403 → próbáld a másik solvert (`SOLVER_IMAGE`), nézd meg a remediation logot és a ZenRows-kreditet
    - Parser hiba → Downdetector formátum változott, kézzel kell frissíteni
 5. **State reset** (ha kell): Szerkeszd a `state.json`-t kézzel és commitold:
    ```json
