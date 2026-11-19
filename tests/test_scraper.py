@@ -6,8 +6,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src import scraper, config
-from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, parse_reports, fetch_html, get_current_value
+from src import config, scraper
+from src.scraper import (
+    FetchError,
+    ParseError,
+    ParseResult,
+    ReportPoint,
+    fetch_html,
+    get_current_value,
+    parse_reports,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

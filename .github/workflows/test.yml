@@ -1,0 +1,37 @@
+name: Tests
+
+# Quality gate: lint + tests on every push and pull request.
+# The bot's state commits (state.json / history.csv) are skipped.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['state.json', 'history.csv']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # No real secrets here: tests must never message Telegram.
+      TELEGRAM_BOT_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Lint
+        run: ruff check .
+      - name: Tests
+        run: pytest -q

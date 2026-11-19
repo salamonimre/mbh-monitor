@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-
 DOWNDETECTOR_URL: str = os.environ.get(
     "DOWNDETECTOR_URL",
     "https://downdetector.hu/problema/mbh-bank/",

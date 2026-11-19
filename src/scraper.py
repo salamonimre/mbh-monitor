@@ -10,7 +10,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import requests
 
@@ -115,7 +115,7 @@ def fetch_html(url: str, *, timeout: int | None = None) -> str:
             logger.info("Fetched %d bytes via solver (attempt %d)",
                         len(result.response_html), attempt + 1)
             return result.response_html
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - retried with backoff, re-raised as FetchError
             last_exc = exc
             if attempt < config.MAX_RETRIES - 1:
                 wait = config.RETRY_BACKOFF_BASE ** (attempt + 1)
@@ -228,14 +228,14 @@ def _parse_aria_label_strategy(html: str) -> list[ReportPoint]:
     )
     if match:
         value = int(match.group(1))
-        return [ReportPoint(timestamp=datetime.now(timezone.utc), value=value)]
+        return [ReportPoint(timestamp=datetime.now(UTC), value=value)]
     return []
 
 
 def _parse_heading_strategy(html: str) -> list[ReportPoint]:
     """Fallback: 'no current problems' heading → 0 reports."""
     if re.search(r'no current problems', html, re.IGNORECASE):
-        return [ReportPoint(timestamp=datetime.now(timezone.utc), value=0)]
+        return [ReportPoint(timestamp=datetime.now(UTC), value=0)]
     return []
 
 
@@ -253,7 +253,7 @@ def parse_reports(html: str) -> ParseResult:
             len(points), points[-1].value, points[-1].timestamp.isoformat(),
         )
         logger.info("Recent points: %s",
-                     ", ".join("%d@%s" % (p.value, p.timestamp.strftime('%H:%M')) for p in points[-5:]))
+                     ", ".join(f"{p.value}@{p.timestamp.strftime('%H:%M')}" for p in points[-5:]))
         return ParseResult(points=points, strategy="rsc")
 
     # Strategy 2: JSON anywhere (RSC delivery changed but data structure intact)
