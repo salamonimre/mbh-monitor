@@ -1,8 +1,7 @@
 """Tests for state module – load/save/serialization."""
 
 import json
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 
 from src.state import State, load, save
 
@@ -24,7 +23,7 @@ class TestState:
         assert s.degraded_parse_alert_sent is False
 
     def test_to_dict_and_back(self):
-        now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=UTC)
         s = State(last_value=42, last_checked=now, alert_active=True, alert_started_at=now)
         d = s.to_dict()
         restored = State.from_dict(d)
@@ -59,7 +58,7 @@ class TestLoadSave:
 
     def test_save_and_load_roundtrip(self, tmp_path):
         path = tmp_path / "state.json"
-        now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2024, 4, 22, 12, 0, 0, tzinfo=UTC)
         original = State(last_value=55, last_checked=now, alert_active=True, alert_started_at=now)
         save(original, path)
         loaded = load(path)

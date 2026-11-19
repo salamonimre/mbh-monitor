@@ -1,17 +1,17 @@
 """Tests for auto-remediation module."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import requests
 
 from src.remediation import (
     ErrorCategory,
-    attempt_remediation,
-    classify_error,
     _get_cooldown_minutes,
     _is_on_cooldown,
     _record_attempt,
+    attempt_remediation,
+    classify_error,
 )
 from src.scraper import FetchError, ParseError, ParseResult, ReportPoint
 from src.state import State
@@ -61,7 +61,7 @@ class TestCooldown:
         state = State()
         state.remediation_attempts = {
             "zenrows_no_premium": {
-                "last_tried": datetime.now(timezone.utc).isoformat(),
+                "last_tried": datetime.now(UTC).isoformat(),
                 "last_result": "success",
                 "fail_count": 0,
             }
@@ -72,7 +72,7 @@ class TestCooldown:
         state = State()
         state.remediation_attempts = {
             "direct_request": {
-                "last_tried": datetime.now(timezone.utc).isoformat(),
+                "last_tried": datetime.now(UTC).isoformat(),
                 "last_result": "fail",
                 "fail_count": 1,
             }
@@ -83,7 +83,7 @@ class TestCooldown:
 
     def test_old_failure_off_cooldown(self):
         state = State()
-        old_time = (datetime.now(timezone.utc) - timedelta(minutes=150)).isoformat()
+        old_time = (datetime.now(UTC) - timedelta(minutes=150)).isoformat()
         state.remediation_attempts = {
             "direct_request": {
                 "last_tried": old_time,
@@ -134,7 +134,7 @@ class TestProgressiveCooldown:
         """fail_count=2 → cooldown should be 60 min, not 30."""
         state = State()
         # Failed 15 minutes ago, fail_count=2 → cooldown=60min → 45min remaining
-        recent = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        recent = (datetime.now(UTC) - timedelta(minutes=15)).isoformat()
         state.remediation_attempts = {
             "direct_request": {
                 "last_tried": recent,
@@ -149,7 +149,7 @@ class TestProgressiveCooldown:
     def test_first_failure_short_cooldown_expires(self):
         """fail_count=1 → cooldown=30min. After 35min, should be off cooldown."""
         state = State()
-        old = (datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat()
+        old = (datetime.now(UTC) - timedelta(minutes=35)).isoformat()
         state.remediation_attempts = {
             "direct_request": {
                 "last_tried": old,
@@ -163,7 +163,7 @@ class TestProgressiveCooldown:
 class TestAttemptRemediation:
     def _make_parse_result(self):
         return ParseResult(
-            points=[ReportPoint(timestamp=datetime.now(timezone.utc), value=5)],
+            points=[ReportPoint(timestamp=datetime.now(UTC), value=5)],
             strategy="rsc",
         )
 
@@ -243,7 +243,7 @@ class TestAttemptRemediation:
         state = State(consecutive_fetch_failures=1)
         state.remediation_attempts = {
             "zenrows_no_premium": {
-                "last_tried": datetime.now(timezone.utc).isoformat(),
+                "last_tried": datetime.now(UTC).isoformat(),
                 "last_result": "fail",
                 "fail_count": 1,
             }

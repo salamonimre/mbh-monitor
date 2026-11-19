@@ -6,10 +6,12 @@ import logging
 import random
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from src import config
+from src.history import append_row
 from src.notifier import (
     send_alert,
     send_daily_summary,
@@ -21,11 +23,15 @@ from src.notifier import (
     send_retroactive_alert,
     send_zenrows_credit_warning,
 )
-from pathlib import Path
-
-from src.history import append_row
 from src.remediation import attempt_remediation
-from src.scraper import FetchError, ParseError, ParseResult, ReportPoint, fetch_html, parse_reports
+from src.scraper import (
+    FetchError,
+    ParseError,
+    ParseResult,
+    ReportPoint,
+    fetch_html,
+    parse_reports,
+)
 from src.state import State, load, save
 
 logging.basicConfig(
@@ -48,7 +54,7 @@ def _save_debug_html(html: str) -> None:
     try:
         DEBUG_HTML_PATH.write_text(html, encoding="utf-8")
         logger.info("Debug HTML saved to %s (%d bytes)", DEBUG_HTML_PATH, len(html))
-    except Exception:
+    except Exception:  # noqa: BLE001 - debug output must never break the run
         logger.warning("Could not save debug HTML")
 
 
@@ -97,7 +103,7 @@ def _detect_retroactive_spike(
         if last_checked is not None:
             ts = p.timestamp
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
             if ts <= last_checked:
                 continue
 
@@ -105,7 +111,7 @@ def _detect_retroactive_spike(
             best_value = p.value
             ts = p.timestamp
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
             best_time = ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
 
     if best_value >= threshold and best_time is not None:
@@ -150,7 +156,7 @@ def _get_chart_max_today(
     for p in points:
         ts = p.timestamp
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         ts_bud = ts.astimezone(BUDAPEST_TZ)
         if ts_bud.strftime("%Y-%m-%d") == today_str and p.value > max_value:
             max_value = p.value
@@ -193,7 +199,7 @@ def _get_pat_expiry_warning() -> str | None:
         expiry = datetime.strptime(config.PAT_EXPIRY_DATE, "%Y-%m-%d").date()
     except ValueError:
         return None
-    days_left = (expiry - datetime.now(timezone.utc).date()).days
+    days_left = (expiry - datetime.now(UTC).date()).days
     if days_left <= 0:
         return f"LEJÁRT a cron-job.org PAT ({config.PAT_EXPIRY_DATE})! Azonnal rotáld."
     if days_left <= config.PAT_EXPIRY_WARNING_DAYS:
@@ -343,7 +349,7 @@ def _process_successful_fetch(
             check_time_str = budapest_now.strftime("%H:%M")
             last_point_ts = points[-1].timestamp
             if last_point_ts.tzinfo is None:
-                last_point_ts = last_point_ts.replace(tzinfo=timezone.utc)
+                last_point_ts = last_point_ts.replace(tzinfo=UTC)
             data_time = last_point_ts.astimezone(BUDAPEST_TZ).strftime("%H:%M")
             data_delay_minutes = int((now - last_point_ts).total_seconds() / 60)
             logger.info("Sending heartbeat (hour %d)", hb_hour)
@@ -380,7 +386,7 @@ def run(state_path: str | None = None) -> int:
     time.sleep(jitter)
 
     state = load(state_path)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     budapest_now = now.astimezone(BUDAPEST_TZ)
     today_str = budapest_now.strftime("%Y-%m-%d")
 
@@ -425,7 +431,7 @@ def run(state_path: str | None = None) -> int:
             result, html, state, now, budapest_now, today_str, state_path,
         )
 
-    except (FetchError, ParseError, Exception) as exc:
+    except (FetchError, ParseError, Exception) as exc:  # noqa: BLE001 - graceful failure path, logged and counted
         state.failed_fetches += 1
         state.daily_failed_fetches += 1
         if isinstance(exc, ParseError) and html:

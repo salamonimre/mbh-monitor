@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -10,15 +10,15 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.main import (
-    decide_action,
-    run,
     _detect_retroactive_spike,
+    _get_chart_max_today,
     _get_heartbeat_hour,
     _is_summary_hour,
     _reset_daily_stats_if_needed,
     _reset_weekly_stats_if_needed,
     _update_daily_stats,
-    _get_chart_max_today,
+    decide_action,
+    run,
 )
 from src.scraper import ParseResult, ReportPoint
 from src.state import State, load, save
@@ -29,7 +29,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def _make_points(value: int, ts: datetime | None = None) -> list[ReportPoint]:
     """Create a single-point list for simple test cases."""
-    ts = ts or datetime(2026, 7, 15, 11, 0, 0, tzinfo=timezone.utc)
+    ts = ts or datetime(2026, 7, 15, 11, 0, 0, tzinfo=UTC)
     return [ReportPoint(timestamp=ts, value=value)]
 
 
@@ -108,10 +108,10 @@ class TestGetChartMaxToday:
     def test_finds_max_from_today(self):
         budapest_now = datetime(2026, 7, 15, 13, 0, tzinfo=BUDAPEST_TZ)
         points = [
-            ReportPoint(datetime(2026, 7, 15, 7, 0, tzinfo=timezone.utc), 2),   # 9:00 Budapest
-            ReportPoint(datetime(2026, 7, 15, 7, 41, tzinfo=timezone.utc), 5),  # 9:41 Budapest
-            ReportPoint(datetime(2026, 7, 15, 8, 0, tzinfo=timezone.utc), 1),   # 10:00 Budapest
-            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc), 0),  # 13:00 Budapest
+            ReportPoint(datetime(2026, 7, 15, 7, 0, tzinfo=UTC), 2),   # 9:00 Budapest
+            ReportPoint(datetime(2026, 7, 15, 7, 41, tzinfo=UTC), 5),  # 9:41 Budapest
+            ReportPoint(datetime(2026, 7, 15, 8, 0, tzinfo=UTC), 1),   # 10:00 Budapest
+            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=UTC), 0),  # 13:00 Budapest
         ]
         max_val, max_time = _get_chart_max_today(points, budapest_now)
         assert max_val == 5
@@ -120,16 +120,16 @@ class TestGetChartMaxToday:
     def test_ignores_yesterday_points(self):
         budapest_now = datetime(2026, 7, 15, 13, 0, tzinfo=BUDAPEST_TZ)
         points = [
-            ReportPoint(datetime(2026, 7, 14, 20, 0, tzinfo=timezone.utc), 50),  # Yesterday
-            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc), 3),   # Today
+            ReportPoint(datetime(2026, 7, 14, 20, 0, tzinfo=UTC), 50),  # Yesterday
+            ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=UTC), 3),   # Today
         ]
-        max_val, max_time = _get_chart_max_today(points, budapest_now)
+        max_val, _max_time = _get_chart_max_today(points, budapest_now)
         assert max_val == 3
 
     def test_returns_zero_when_no_today_points(self):
         budapest_now = datetime(2026, 7, 15, 1, 0, tzinfo=BUDAPEST_TZ)
         points = [
-            ReportPoint(datetime(2026, 7, 13, 20, 0, tzinfo=timezone.utc), 50),
+            ReportPoint(datetime(2026, 7, 13, 20, 0, tzinfo=UTC), 50),
         ]
         max_val, max_time = _get_chart_max_today(points, budapest_now)
         assert max_val == 0
@@ -365,15 +365,15 @@ class TestRun:
         # Chart has a spike at 9:41 (value=15), current value is 2
         mock_parse.return_value = ParseResult(
             points=[
-                ReportPoint(datetime(2026, 7, 15, 7, 0, tzinfo=timezone.utc), 1),
-                ReportPoint(datetime(2026, 7, 15, 7, 41, tzinfo=timezone.utc), 15),
-                ReportPoint(datetime(2026, 7, 15, 8, 0, tzinfo=timezone.utc), 3),
-                ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc), 2),
+                ReportPoint(datetime(2026, 7, 15, 7, 0, tzinfo=UTC), 1),
+                ReportPoint(datetime(2026, 7, 15, 7, 41, tzinfo=UTC), 15),
+                ReportPoint(datetime(2026, 7, 15, 8, 0, tzinfo=UTC), 3),
+                ReportPoint(datetime(2026, 7, 15, 11, 0, tzinfo=UTC), 2),
             ],
             strategy="rsc",
         )
         state_path = tmp_path / "state.json"
-        fake_now = datetime(2026, 7, 15, 11, 0, 0, tzinfo=timezone.utc)  # 13:00 Budapest
+        fake_now = datetime(2026, 7, 15, 11, 0, 0, tzinfo=UTC)  # 13:00 Budapest
 
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
@@ -431,11 +431,11 @@ class TestErrorAlerting:
         )
         state_path = tmp_path / "state.json"
         # 1 previous failure, 35 minutes ago
-        first_fail = datetime(2026, 7, 15, 10, 0, 0, tzinfo=timezone.utc)
+        first_fail = datetime(2026, 7, 15, 10, 0, 0, tzinfo=UTC)
         save(State(consecutive_fetch_failures=1, error_alert_sent=False,
                    first_failure_at=first_fail), state_path)
 
-        fake_now = datetime(2026, 7, 15, 10, 35, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2026, 7, 15, 10, 35, 0, tzinfo=UTC)
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
             mock_config.validate.return_value = []
@@ -463,7 +463,7 @@ class TestErrorAlerting:
             success=False, error_category=ErrorCategory.UNKNOWN, attempts=[], duration_s=0.0,
         )
         state_path = tmp_path / "state.json"
-        first_fail = datetime(2026, 7, 15, 9, 0, 0, tzinfo=timezone.utc)
+        first_fail = datetime(2026, 7, 15, 9, 0, 0, tzinfo=UTC)
         # Use 7 (not 5) so after +1 it becomes 8, which is NOT an escalation point (6,12,24)
         save(State(consecutive_fetch_failures=7, error_alert_sent=True,
                    first_failure_at=first_fail), state_path)
@@ -537,7 +537,7 @@ class TestFetchStats:
     def test_success_increments_total(self, mock_html, mock_parse, tmp_path):
         mock_parse.return_value = _make_result(5)
         state_path = tmp_path / "state.json"
-        today = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
         save(State(total_fetches=10, failed_fetches=2,
                    daily_total_fetches=5, daily_failed_fetches=1,
                    daily_max_date=today), state_path)
@@ -568,7 +568,7 @@ class TestFetchStats:
             success=False, error_category=ErrorCategory.UNKNOWN, attempts=[], duration_s=0.0,
         )
         state_path = tmp_path / "state.json"
-        today = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).astimezone(ZoneInfo("Europe/Budapest")).strftime("%Y-%m-%d")
         save(State(total_fetches=10, failed_fetches=2,
                    daily_total_fetches=5, daily_failed_fetches=1,
                    daily_max_date=today), state_path)
@@ -600,7 +600,7 @@ class TestHeartbeatIntegration:
     def test_morning_heartbeat_sent(self, mock_html, mock_parse, mock_hb, tmp_path):
         mock_parse.return_value = _make_result(3)
         state_path = tmp_path / "state.json"
-        fake_now = datetime(2026, 7, 15, 7, 15, 0, tzinfo=timezone.utc)  # 9:15 Budapest
+        fake_now = datetime(2026, 7, 15, 7, 15, 0, tzinfo=UTC)  # 9:15 Budapest
 
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
@@ -628,7 +628,7 @@ class TestHeartbeatIntegration:
                    daily_max_date="2026-07-15", daily_alert_times=["14:20"],
                    heartbeat_sent={"9": "2026-07-15"}),
              state_path)
-        fake_now = datetime(2026, 7, 15, 17, 10, 0, tzinfo=timezone.utc)  # 19:10 Budapest
+        fake_now = datetime(2026, 7, 15, 17, 10, 0, tzinfo=UTC)  # 19:10 Budapest
 
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
@@ -659,7 +659,7 @@ class TestHeartbeatIntegration:
         mock_parse.return_value = _make_result(3)
         state_path = tmp_path / "state.json"
         save(State(heartbeat_sent={"9": "2026-07-15"}), state_path)
-        fake_now = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)  # 14:00 Budapest
+        fake_now = datetime(2026, 7, 15, 12, 0, 0, tzinfo=UTC)  # 14:00 Budapest
 
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
@@ -754,13 +754,13 @@ class TestDetectRetroactiveSpike:
 
     def test_spike_after_last_checked(self):
         """Spike after last_checked should be detected."""
-        last_checked = datetime(2026, 6, 8, 10, 0, 0, tzinfo=timezone.utc)
+        last_checked = datetime(2026, 6, 8, 10, 0, 0, tzinfo=UTC)
         points = [
-            ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=timezone.utc), 6),
-            ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=timezone.utc), 4),
-            ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=timezone.utc), 13),  # spike
-            ReportPoint(datetime(2026, 6, 8, 10, 55, tzinfo=timezone.utc), 6),
-            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 7),  # current
+            ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=UTC), 6),
+            ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=UTC), 4),
+            ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=UTC), 13),  # spike
+            ReportPoint(datetime(2026, 6, 8, 10, 55, tzinfo=UTC), 6),
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=UTC), 7),  # current
         ]
         result = _detect_retroactive_spike(points, last_checked, 10, False, 7)
         assert result is not None
@@ -769,40 +769,40 @@ class TestDetectRetroactiveSpike:
 
     def test_all_below_threshold(self):
         """No spike when all points are below threshold."""
-        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=UTC)
         points = [
-            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 3),
-            ReportPoint(datetime(2026, 6, 8, 11, 25, tzinfo=timezone.utc), 5),
-            ReportPoint(datetime(2026, 6, 8, 11, 40, tzinfo=timezone.utc), 7),
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=UTC), 3),
+            ReportPoint(datetime(2026, 6, 8, 11, 25, tzinfo=UTC), 5),
+            ReportPoint(datetime(2026, 6, 8, 11, 40, tzinfo=UTC), 7),
         ]
         result = _detect_retroactive_spike(points, last_checked, 10, False, 7)
         assert result is None
 
     def test_alert_active_skips(self):
         """When alert is active, normal cycle handles it."""
-        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=UTC)
         points = [
-            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 15),
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=UTC), 15),
         ]
         result = _detect_retroactive_spike(points, last_checked, 10, True, 7)
         assert result is None
 
     def test_current_above_threshold_skips(self):
         """When current value >= threshold, normal alert handles it."""
-        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=UTC)
         points = [
-            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 15),
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=UTC), 15),
         ]
         result = _detect_retroactive_spike(points, last_checked, 10, False, 12)
         assert result is None
 
     def test_spike_before_last_checked_ignored(self):
         """Points at or before last_checked are already seen."""
-        last_checked = datetime(2026, 6, 8, 12, 0, 0, tzinfo=timezone.utc)
+        last_checked = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
         points = [
-            ReportPoint(datetime(2026, 6, 8, 11, 30, tzinfo=timezone.utc), 15),  # before
-            ReportPoint(datetime(2026, 6, 8, 12, 0, 0, tzinfo=timezone.utc), 12),  # at last_checked
-            ReportPoint(datetime(2026, 6, 8, 12, 15, tzinfo=timezone.utc), 5),  # after, but below
+            ReportPoint(datetime(2026, 6, 8, 11, 30, tzinfo=UTC), 15),  # before
+            ReportPoint(datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC), 12),  # at last_checked
+            ReportPoint(datetime(2026, 6, 8, 12, 15, tzinfo=UTC), 5),  # after, but below
         ]
         result = _detect_retroactive_spike(points, last_checked, 10, False, 5)
         assert result is None
@@ -810,9 +810,9 @@ class TestDetectRetroactiveSpike:
     def test_last_checked_none_checks_all(self):
         """First run (last_checked=None) should consider all points."""
         points = [
-            ReportPoint(datetime(2026, 6, 8, 10, 0, tzinfo=timezone.utc), 3),
-            ReportPoint(datetime(2026, 6, 8, 10, 15, tzinfo=timezone.utc), 14),  # spike
-            ReportPoint(datetime(2026, 6, 8, 10, 30, tzinfo=timezone.utc), 5),
+            ReportPoint(datetime(2026, 6, 8, 10, 0, tzinfo=UTC), 3),
+            ReportPoint(datetime(2026, 6, 8, 10, 15, tzinfo=UTC), 14),  # spike
+            ReportPoint(datetime(2026, 6, 8, 10, 30, tzinfo=UTC), 5),
         ]
         result = _detect_retroactive_spike(points, None, 10, False, 5)
         assert result is not None
@@ -820,12 +820,12 @@ class TestDetectRetroactiveSpike:
 
     def test_multiple_spikes_returns_highest(self):
         """When multiple points cross threshold, return the highest."""
-        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        last_checked = datetime(2026, 6, 8, 11, 0, 0, tzinfo=UTC)
         points = [
-            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 12),
-            ReportPoint(datetime(2026, 6, 8, 11, 25, tzinfo=timezone.utc), 18),  # highest
-            ReportPoint(datetime(2026, 6, 8, 11, 40, tzinfo=timezone.utc), 11),
-            ReportPoint(datetime(2026, 6, 8, 11, 55, tzinfo=timezone.utc), 7),
+            ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=UTC), 12),
+            ReportPoint(datetime(2026, 6, 8, 11, 25, tzinfo=UTC), 18),  # highest
+            ReportPoint(datetime(2026, 6, 8, 11, 40, tzinfo=UTC), 11),
+            ReportPoint(datetime(2026, 6, 8, 11, 55, tzinfo=UTC), 7),
         ]
         result = _detect_retroactive_spike(points, last_checked, 10, False, 7)
         assert result is not None
@@ -847,19 +847,19 @@ class TestRetroactiveAlertIntegration:
         # Chart: spike at 12:40 UTC (14:40 Budapest), current=7
         mock_parse.return_value = ParseResult(
             points=[
-                ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=timezone.utc), 6),
-                ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=timezone.utc), 4),
-                ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=timezone.utc), 13),
-                ReportPoint(datetime(2026, 6, 8, 10, 55, tzinfo=timezone.utc), 6),
-                ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc), 7),
+                ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=UTC), 6),
+                ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=UTC), 4),
+                ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=UTC), 13),
+                ReportPoint(datetime(2026, 6, 8, 10, 55, tzinfo=UTC), 6),
+                ReportPoint(datetime(2026, 6, 8, 11, 10, tzinfo=UTC), 7),
             ],
             strategy="rsc",
         )
         state_path = tmp_path / "state.json"
         # last_checked before the spike
-        save(State(last_checked=datetime(2026, 6, 8, 10, 0, 0, tzinfo=timezone.utc)), state_path)
+        save(State(last_checked=datetime(2026, 6, 8, 10, 0, 0, tzinfo=UTC)), state_path)
 
-        fake_now = datetime(2026, 6, 8, 11, 30, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2026, 6, 8, 11, 30, 0, tzinfo=UTC)
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
             mock_config.validate.return_value = []
@@ -891,15 +891,15 @@ class TestRetroactiveAlertIntegration:
         """Current value above threshold → normal alert, no retroactive."""
         mock_parse.return_value = ParseResult(
             points=[
-                ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=timezone.utc), 6),
-                ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=timezone.utc), 15),
-                ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=timezone.utc), 12),
+                ReportPoint(datetime(2026, 6, 8, 10, 10, tzinfo=UTC), 6),
+                ReportPoint(datetime(2026, 6, 8, 10, 25, tzinfo=UTC), 15),
+                ReportPoint(datetime(2026, 6, 8, 10, 40, tzinfo=UTC), 12),
             ],
             strategy="rsc",
         )
         state_path = tmp_path / "state.json"
 
-        fake_now = datetime(2026, 6, 8, 11, 0, 0, tzinfo=timezone.utc)
+        fake_now = datetime(2026, 6, 8, 11, 0, 0, tzinfo=UTC)
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
             mock_config.validate.return_value = []
@@ -1112,7 +1112,7 @@ class TestWeeklyRemediation:
                    heartbeat_sent={"9": "2026-09-06"},
                    weekly_remediation_count=4, weekly_remediation_week="2026-W36"),
              state_path)
-        fake_now = datetime(2026, 9, 6, 17, 10, 0, tzinfo=timezone.utc)  # 19:10 Budapest, Sunday
+        fake_now = datetime(2026, 9, 6, 17, 10, 0, tzinfo=UTC)  # 19:10 Budapest, Sunday
 
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:
@@ -1145,7 +1145,7 @@ class TestWeeklyRemediation:
                    heartbeat_sent={"9": "2026-07-15"},
                    weekly_remediation_count=2, weekly_remediation_week="2026-W29"),
              state_path)
-        fake_now = datetime(2026, 7, 15, 17, 10, 0, tzinfo=timezone.utc)  # 19:10 Budapest, Wednesday
+        fake_now = datetime(2026, 7, 15, 17, 10, 0, tzinfo=UTC)  # 19:10 Budapest, Wednesday
 
         with patch("src.main.config") as mock_config, \
              patch("src.main.datetime") as mock_dt:

@@ -10,7 +10,7 @@ import requests
 
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 
-from src import config  # noqa: E402
+from src import config
 
 logger = logging.getLogger(__name__)
 

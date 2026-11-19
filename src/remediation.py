@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 import requests
@@ -98,7 +98,7 @@ def _is_on_cooldown(strategy_name: str, state: State) -> int | None:
     fail_count = attempt_data.get("fail_count", 1)
     cooldown = _get_cooldown_minutes(fail_count)
 
-    elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds() / 60
+    elapsed = (datetime.now(UTC) - last_dt).total_seconds() / 60
     remaining = cooldown - elapsed
     if remaining > 0:
         return int(remaining)
@@ -108,7 +108,7 @@ def _is_on_cooldown(strategy_name: str, state: State) -> int | None:
 def _record_attempt(strategy_name: str, success: bool, state: State) -> None:
     """Record a remediation attempt result in state."""
     entry = state.remediation_attempts.get(strategy_name, {})
-    entry["last_tried"] = datetime.now(timezone.utc).isoformat()
+    entry["last_tried"] = datetime.now(UTC).isoformat()
     entry["last_result"] = "success" if success else "fail"
     entry["fail_count"] = 0 if success else entry.get("fail_count", 0) + 1
     state.remediation_attempts[strategy_name] = entry
@@ -210,7 +210,7 @@ def _strategy_zenrows_alt_country(url: str) -> str:
             logger.info("ZenRows (country=%s) fetched %d bytes (remaining: %s)",
                         country, len(html), remaining)
             return html
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - try the next country
             logger.warning("ZenRows alt country %s failed: %s", country, exc)
             last_exc = exc
 
@@ -271,7 +271,8 @@ _STRATEGIES: list[tuple[str, str, set[ErrorCategory]]] = [
 ]
 
 # Module reference for dynamic lookup
-import sys as _sys  # noqa: E402
+import sys as _sys
+
 _THIS_MODULE = _sys.modules[__name__]
 
 
@@ -359,7 +360,7 @@ def attempt_remediation(url: str, original_error: Exception, state: State) -> Re
                 zenrows_credits_remaining=_last_zenrows_remaining,
             )
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a failed strategy must not stop the chain
             duration = time.monotonic() - attempt_start
             logger.warning("Strategy %s: FAILED (%.1fs) | error=%s",
                            strategy_name, duration, exc)

@@ -5,7 +5,18 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from src import config
-from src.notifier import send_alert, send_recovery, send_retroactive_alert, send_fetch_recovery, send_heartbeat, send_daily_summary, send_parse_degradation_alert, send_remediation_report, send_zenrows_credit_warning, _send_telegram
+from src.notifier import (
+    _send_telegram,
+    send_alert,
+    send_daily_summary,
+    send_fetch_recovery,
+    send_heartbeat,
+    send_parse_degradation_alert,
+    send_recovery,
+    send_remediation_report,
+    send_retroactive_alert,
+    send_zenrows_credit_warning,
+)
 
 
 class TestSendTelegram:
