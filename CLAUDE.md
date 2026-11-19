@@ -1,6 +1,6 @@
 # MBH Bank Downdetector Monitor
 
-Ez a projekt 30 percenként lekérdezi az [MBH Bank Downdetector oldalt](https://downdetector.hu/problema/mbh-bank/), és Telegram értesítést küld, ha a bejelentett hibák száma eléri vagy meghaladja a konfigurálható küszöböt (alapértelmezésben 10).
+Ez a projekt rendszeresen (a két trigger együtt kb. 15 percenként) lekérdezi az [MBH Bank Downdetector oldalt](https://downdetector.hu/problema/mbh-bank/), és Telegram értesítést küld, ha a bejelentett hibák száma eléri vagy meghaladja a konfigurálható küszöböt (alapértelmezésben 10).
 
 ## Gyors áttekintés
 
@@ -30,10 +30,14 @@ mbh-monitor/
 │   ├── test_notifier.py
 │   ├── test_state.py
 │   ├── test_history.py
+│   ├── test_main.py
+│   ├── test_remediation.py
 │   └── fixtures/                # Mentett HTML mintaadatok teszteléshez
 ├── .github/
 │   └── workflows/
-│       └── monitor.yml          # 30 percenkénti cron
+│       ├── monitor.yml          # ütemezett futás (cron 17,47 + cron-job.org :00/:30)
+│       └── test.yml             # minőségkapu: ruff + pytest minden pushra és PR-ra
+│   └── dependabot.yml           # havi függőségfrissítés (pip, actions)
 ├── state.json                   # Állapot (auto-commitelt)
 ├── history.csv                  # Long-term trend tracking (append-only, auto-commitelt)
 ├── requirements.txt
@@ -90,7 +94,7 @@ A `HEARTBEAT_HOURS` env var-ban megadott óráknál (Budapest TZ) küld üzenete
 ### 5. Redundáns ütemezés (belső + külső cron)
 A GitHub Actions cron megbízhatatlan (±5-10 perces késés, néha 1-2 órás kimaradás). Ezért **két triggerrel** dolgozunk:
 - **cron-job.org** (elsődleges): `:00` és `:30`-kor (`*/30`), workflow_dispatch API híváson keresztül
-- **GitHub Actions cron** (backup): `:15` és `:45`-kor (`15,45`), offset-elve az ütközés elkerüléséhez
+- **GitHub Actions cron** (backup): `:17` és `:47`-kor (`17,47`), offset-elve az ütközés elkerüléséhez
 - **Concurrency group** (`monitor`, `cancel-in-progress: false`): ha mégis átfedés lenne, a második futás sorba áll
 - A script idempotens, a heartbeat deduplikált (`state.json`) → dupla futás nem okoz dupla értesítést
 - A cron-job.org egy **fine-grained GitHub PAT**-on keresztül hívja a workflow dispatch API-t (csak Actions write scope, csak erre a repóra). A token lejárata: **2027-01-13** — lejárat előtt rotálni kell.
@@ -112,7 +116,7 @@ A `fetch_html()` solver-agnosztikus: FlareSolverr-rel és ByParr-ral egyaránt m
 
 ### 8. Scraping respectful
 - User-Agent reális (FlareSolverr Chrome)
-- 30 percnél gyakrabban SOHA nem kérdez le
+- A két trigger együtt óránként legfeljebb ~4 lekérést ad (kb. 15 percenként). Az eredeti elv 30 perc volt; a dupla trigger óta ez felülvizsgálandó (Imre döntése, 2026-11-19).
 - Ha 429-et kapunk, exponenciális backoff
 
 ### 9. Strukturált logolás (post-mortem rekonstrukció)
@@ -189,8 +193,8 @@ pytest tests/ -v
 # Coverage
 pytest tests/ --cov=src --cov-report=term-missing
 
-# Lint
-ruff check src/ tests/
+# Lint (ugyanez fut a CI-ban)
+ruff check .
 
 # Manuális GitHub Actions trigger (gh cli)
 gh workflow run monitor.yml

@@ -189,7 +189,7 @@ Először állítsd be ideiglenesen alacsonyra a küszöböt (pl. 1), hogy bizto
 
 A workflow `17,47 * * * *`-vel van ütemezve (GitHub Actions belső cron, `:17` és `:47`-kor – offsetelve a cron-job.org `:00/:30` triggerétől). A GitHub ingyenes cron **pár perces késéssel** szokott indulni. Nézd meg 20 perc múlva az Actions fület, hogy van-e ott új futás magától.
 
-**Opcionális**: cron-job.org külső triggert is beállíthatsz `:00` és `:30`-ra, így ~15 percenként lesz coverage. A setup-hoz fine-grained GitHub PAT kell (Actions write scope, csak erre a repóra), amit a cron-job.org workflow_dispatch API-n keresztül hív.
+**Élesben be van állítva (elsődleges trigger)**: cron-job.org külső trigger `:00` és `:30`-ra, így ~15 percenként lesz coverage. A setup-hoz fine-grained GitHub PAT kell (Actions write scope, csak erre a repóra), amit a cron-job.org workflow_dispatch API-n keresztül hív.
 
 ---
 

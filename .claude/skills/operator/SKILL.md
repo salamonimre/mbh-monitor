@@ -24,7 +24,7 @@ name: MBH Monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5 percenként
+    - cron: '17,47 * * * *'  # backup; elsődleges: cron-job.org :00/:30 (workflow_dispatch, PAT)
   workflow_dispatch:        # manuális indítás is engedélyezett
 
 permissions:
@@ -67,7 +67,7 @@ jobs:
 
 ### Kulcs döntések indoklása
 
-- **`*/5 * * * *`**: 5 perces cron. Megjegyzés: a GitHub Actions free tier-nél a cron **nem garantáltan pontos**, akár 10-15 perc késés is lehet terhelt időszakban. Ezzel élni kell.
+- **`17,47 * * * *` + cron-job.org `:00/:30`**: a GitHub-cron késhet vagy kimaradhat, ezért a cron-job.org az elsődleges trigger (fine-grained PAT, lejár: 2027-01-13). A minőségkapu külön workflow: `test.yml` (ruff + pytest).
 - **`timeout-minutes: 3`**: ha valami beakad (pl. Cloudflare lassú), ne fogyasszuk az ingyenes perceket.
 - **`concurrency.cancel-in-progress: false`**: ha előző futás még fut (ritka), ne szakítsa meg, mert a state fájl korrupttá válhat.
 - **`[skip ci]`** a commit üzenetben: fontos, különben a commit újabb workflow-t triggerelne push-ra.
